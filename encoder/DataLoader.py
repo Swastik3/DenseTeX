@@ -40,17 +40,38 @@ class CustomDataset(Dataset):
         img_name = os.path.join(self.image_dir, f"{actual_idx:07d}.png")
         image = Image.open(img_name).convert('RGB')
         label = self.labels[actual_idx].strip()
+        image = self.resize_and_pad(image, 800, 400)
         
         if self.transform:
             image = self.transform(image)
         else:
             transform = transforms.Compose([
-                transforms.Resize((256, 256)),
                 transforms.ToTensor()
             ])
             image = transform(image)
         
         return image, label
+
+    def resize_and_pad(self, image, target_width, target_height):
+        # Calculate the ratio to maintain the aspect ratio
+        original_width, original_height = image.size
+        ratio = min(target_width / original_width, target_height / original_height)
+    
+        # Resize the image while maintaining the aspect ratio
+        new_size = (int(original_width * ratio), int(original_height * ratio))
+        resized_image = image.resize(new_size, Image.ANTIALIAS)
+    
+        # Create a new image with the specified target size and a white background
+        new_image = Image.new("RGB", (target_width, target_height), (255, 255, 255))
+    
+        # Calculate the position to paste the resized image on the white background
+        paste_x = (target_width - new_size[0]) // 2
+        paste_y = (target_height - new_size[1]) // 2
+    
+        # Paste the resized image onto the white background
+        new_image.paste(resized_image, (paste_x, paste_y))
+    
+        return new_image
 
 def get_dataloader(batch_size, image_dir='../../UniMER-1M/images/', label_file='../../UniMER-1M/train.txt', transform=None, cache_file='valid_indices_cache.pkl'):
     dataset = CustomDataset(image_dir=image_dir, label_file=label_file, transform=transform, cache_file=cache_file)
