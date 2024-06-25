@@ -18,6 +18,4 @@ i = 0
 for images, labels in train_loader:
     #outputs = model(images)  # Get the feature maps
     print (labels[0])
-    i += 1
-    if i > 10:
-        break
+    break
