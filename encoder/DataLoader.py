@@ -59,7 +59,7 @@ class CustomDataset(Dataset):
     
         # Resize the image while maintaining the aspect ratio
         new_size = (int(original_width * ratio), int(original_height * ratio))
-        resized_image = image.resize(new_size, Image.ANTIALIAS)
+        resized_image = image.resize(new_size, Image.LANCZOS)
     
         # Create a new image with the specified target size and a white background
         new_image = Image.new("RGB", (target_width, target_height), (255, 255, 255))
