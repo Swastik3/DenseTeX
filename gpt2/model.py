@@ -115,7 +115,7 @@ class GPTConfig:
     dropout: float = 0.1
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster    
     block_size: int = 300  # Set to match the first dimension of our embeddings
-    vocab_size: int = 1000  # Set this to the number of classes in your task basically means the number of tokens in your vocabulary
+    vocab_size: int = 50257 #1000   # Set this to the number of classes in your task basically means the number of tokens in your vocabulary
 
 
 class GPT(nn.Module):
@@ -136,14 +136,14 @@ class GPT(nn.Module):
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
 
+        # self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-        # generate token embeddings
-        self.token_embed = nn.Embedding( num_embeddings = config.vocab_size, embedding_dim=config.n_embd, padding_idx=None ) 
-
+        # to create a separate embedding layer
+        self.token_embedding_layer = nn.Embedding(config.vocab_size, config.n_embd)
+        
         # weight tying
-        self.token_embed = self.lm_head.weight
-
+        self.token_embedding_layer.weight = self.lm_head.weight
 
         # init all weights
         self.apply(self._init_weights)
@@ -183,38 +183,39 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
 
-    def forward(self, idx, targets=None):
+    # def forward(self, idx, targets=None):
 
-        # device = idx.device
-        b, t, e = idx.size()
+    #     # device = idx.device
+    #     b, t, e = idx.size()
 
-        assert t == self.config.batch_size and e == self.config.n_embd, f"Input should be of shape [batch_size, {self.config.embedding_size}, {self.config.n_embd}], but got {idx.shape}"
-
-
-
-        # forward the GPT model itself]
-        x = self.transformer.drop(idx)
-
-        for block in self.transformer.h:
-            x = block(x)
-
-        x = self.transformer.ln_f(x)
+    #     assert t == self.config.block_size and e == self.config.n_embd, f"Input should be of shape [batch_size, {self.config.embedding_size}, {self.config.n_embd}], but got {idx.shape}"
 
 
 
-        # loss calculation for targets will change according to tokenizer ??????
+    #     # forward the GPT model itself]
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+    #     x = self.transformer.drop(idx)
 
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
+    #     for block in self.transformer.h:
+    #         x = block(x)
 
-        return logits, loss
+    #     x = self.transformer.ln_f(x)
+
+    #     logits = self.lm_head(x)
+
+
+    #     # loss calculation for targets will change according to tokenizer ??????
+
+    #     if targets is not None:
+    #         # if we are given some desired targets also calculate the loss
+    #         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+
+    #     else:
+    #         # inference-time mini-optimization: only forward the lm_head on the very last position
+    #         logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+    #         loss = None
+
+    #     return logits, loss
 
 
 
@@ -231,6 +232,31 @@ class GPT(nn.Module):
     #             block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
 
 
+
+    def forward(self, idx, targets=None):
+        b, t, e = idx.size()
+        assert t == self.config.block_size and e == self.config.n_embd, f"Input should be of shape [batch_size, {self.config.block_size}, {self.config.n_embd}], but got {idx.shape}"
+
+        # forward the GPT model itself
+        x = self.transformer.drop(idx)
+
+        for block in self.transformer.h:
+            x = block(x)
+
+        x = self.transformer.ln_f(x)
+
+        # Calculate logits for all positions
+        logits = self.lm_head(x)
+
+        # loss calculation for targets will change according to tokenizer
+        if targets is not None:
+            # if we are given some desired targets also calculate the loss
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        else:
+            loss = None
+
+        return logits, loss
+    
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
 
@@ -421,10 +447,10 @@ class GPT(nn.Module):
     def token_embedding(self, tokens):
         """
         Convert token indices to embeddings.
-        This method needs to be implemented based on how you're handling token embeddings in your model.
+        This method needs to be implemented based on how we're handling token embeddings in your model.
         """
         # This is a placeholder. You need to implement this based on your model's architecture.
         # It might involve using the weights from self.lm_head or a separate embedding layer.
 
 
-        return self.token_embed(tokens)
+        return self.token_embedding_layer(tokens)
