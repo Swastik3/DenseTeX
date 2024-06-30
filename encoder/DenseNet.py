@@ -45,9 +45,9 @@ class PositionalEncoding2D(nn.Module):
         # Ensure the input has the correct number of channels
         assert self.d_model == channels, "Dimension mismatch: d_model and input channels must be the same"
         # Add positional encodings to the input tensor
+        self.pe = self.pe.to(x.device)
         x = x + self.pe.unsqueeze(0) #the unsqueeze() might not be necessary, idk
-        # cax = plt.matshow(x[0][1600])
-        # plt.gcf().colorbar(cax)
+    
         # plt.imshow(self.pe[100], cmap = "gray")
         return x
 
