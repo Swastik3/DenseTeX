@@ -129,8 +129,6 @@ class GPT(nn.Module):
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
-            # wte = nn.Embedding(config.vocab_size, config.n_embd),
-            # wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
@@ -197,12 +195,12 @@ class GPT(nn.Module):
 
 
 
-    def forward(self, idx, targets=None):
-        b, t, e = idx.size()
-        assert t == self.config.block_size and e == self.config.n_embd, f"Input should be of shape [batch_size, {self.config.block_size}, {self.config.n_embd}], but got {idx.shape}"
+    def forward(self, input_embd, targets=None):
+        b, t, e = input_embd.size()
+        assert t == self.config.block_size and e == self.config.n_embd, f"Input should be of shape [batch_size, {self.config.block_size}, {self.config.n_embd}], but got {input_embd.shape}"
 
         # forward the GPT model itself
-        x = self.transformer.drop(idx)
+        x = self.transformer.drop(input_embd)
 
         for block in self.transformer.h:
             x = block(x)
@@ -332,7 +330,7 @@ class GPT(nn.Module):
         """
         Generate LateX tokens given image embeddings
 
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        Take a conditioning sequence of input embeddings (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         
