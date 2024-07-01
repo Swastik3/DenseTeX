@@ -24,11 +24,13 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import DataLoader, Dataset  
 from model import GPTConfig, GPT
-
+from torchvision import models
+from encoder.DenseNet import PositionalEncoding2D, InputEmbeddings
 
 # HYPERPARAMETERS
 
@@ -311,15 +313,39 @@ local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 
+# Define the DenseNet169 model
+densenet_model = models.densenet169(pretrained=True)
+
+# Remove the final fully connected layer to get the final feature maps
+densenet_model = nn.Sequential(*list(densenet_model.children())[:-1])
+densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 800, 400)) # hardcoded this based on denseNet output size
+densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, 768))
+
+# Move the DenseNet model to the correct device
+densenet_model = densenet_model.to(device)
+
+# Wrap the original model to include the DenseNet model as the first layers
+class CombinedModel(nn.Module):
+    def __init__(self, densenet_model, original_model):
+        super(CombinedModel, self).__init__()
+        self.densenet_model = densenet_model
+        self.original_model = original_model
+
+    def forward(self, images, targets):
+        embeddings = self.densenet_model(images)
+        outputs = self.original_model(input_embd=embeddings, targets=targets)
+        return outputs
+
+# Replace the original model with the combined model
+
 model.train()
 
 
 for epoch in range(num_epochs):
 
-    for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
+    for images, latex_labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
         # Get the image embeddings and the latex labels
-        embeddings, latex_labels = batch
-        embeddings = embeddings.to(device)
+        images = images.to(device)
         
         # Tokenize LaTeX labels
         input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
@@ -372,7 +398,8 @@ for epoch in range(num_epochs):
 
             # Forward pass
             with ctx:
-                outputs = model(input_embd=embeddings, targets=targets)
+                model = CombinedModel(densenet_model, model)
+                outputs = model(images=images, targets=targets)
                 loss = outputs.loss / gradient_accumulation_steps
             
             # Backward pass
