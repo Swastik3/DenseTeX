@@ -2,3 +2,4 @@ __pycache__/
 tokens.txt
 text.txt
 data/
+.DS_Store

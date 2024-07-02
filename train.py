@@ -30,7 +30,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import DataLoader, Dataset  
 from model import GPTConfig, GPT
 from torchvision import models
-from encoder.DenseNet import PositionalEncoding2D, InputEmbeddings
+from DenseNet import PositionalEncoding2D, InputEmbeddings
 from transformers import AutoTokenizer
 
 # HYPERPARAMETERS
@@ -226,7 +226,7 @@ if ddp:
 # ---------------------------------------------------------------------------
 
 import tqdm
-from encoder.DataLoader import get_dataloader
+from DataLoader import get_dataloader
 
 
 # Define the DenseNet169 model
