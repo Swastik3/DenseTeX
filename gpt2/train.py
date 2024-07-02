@@ -228,6 +228,31 @@ if ddp:
 import tqdm
 from encoder.DataLoader import get_dataloader
 
+
+# Define the DenseNet169 model
+densenet_model = models.densenet169(pretrained=True)
+
+# Remove the final fully connected layer to get the final feature maps
+densenet_model = nn.Sequential(*list(densenet_model.children())[:-1])
+densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 800, 400)) # hardcoded this based on denseNet output size
+densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, 768))
+
+# Move the DenseNet model to the correct device
+densenet_model = densenet_model.to(device)
+
+# Wrap the original model to include the DenseNet model as the first layers
+class CombinedModel(nn.Module):
+    def __init__(self, densenet_model, original_model):
+        super(CombinedModel, self).__init__()
+        self.densenet_model = densenet_model
+        self.original_model = original_model
+
+    def forward(self, images, targets):
+        embeddings = self.densenet_model(images)
+        outputs = self.original_model(input_embd=embeddings, targets=targets)
+        return outputs
+
+# Replace the original model with the combined model
 num_epochs = 10
 global_step = 0
 
@@ -235,9 +260,9 @@ global_step = 0
 tokenizer = AutoTokenizer.from_pretrained("witiko/mathberta")
 
 def tokenize_latex(latex_text, max_length):
-    encoded = tokenizer(latex_text, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
-    input_ids = encoded['input_ids']
-    attention_mask = encoded['attention_mask']
+    toks = tokenizer(latex_text, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
+    input_ids = toks['input_ids']
+    attention_mask = toks['attention_mask']
     
     targets = input_ids.clone()
     # Shift targets to the right, filling in with pad token
@@ -269,50 +294,34 @@ val_loader = get_dataloader(batch_size=32, image_dir='../../UniMER-1M/images/', 
 @torch.no_grad()
 
 # calculate loss on train and val sets
-# def evaluate(model, train_loader, val_loader, device, eval_iters=100):
-#     model.eval()
-#     results = {}
-
-#     for split, loader in [("train", train_loader), ("val", val_loader)]:
-#         total_loss = 0
-#         for i, (input_embed, latex_labels) in enumerate(loader):
-#             if i >= eval_iters:
-#                 break
-            
-#             input_embed = input_embed.to(device)
-            
-#             # Tokenize LaTeX labels
-#             targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
-#             targets = targets.to(device)
-            
-#             # Forward pass
-#             outputs = model(input_embd=input_embed, targets=targets)
-#             loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
-            
-#             total_loss += loss.item()
-        
-#         avg_loss = total_loss / min(eval_iters, len(loader))
-#         results[split] = avg_loss
-
-#     model.train()
-#     return results
-
-def evaluate(model, data_loader, device):
+def evaluate(model, train_loader, val_loader, device, eval_iters=100):
     model.eval()
-    total_loss = 0
-    for images, latex_labels in data_loader:
-        images = images.to(device)
-        input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
-        input_ids = input_ids.to(device)
-        attention_mask = attention_mask.to(device)
-        targets = targets.to(device)
-        
-        outputs = model(images=images, targets=targets)
-        loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
-        total_loss += loss.item()
-    
-    return total_loss / len(data_loader)
+    results = {}
 
+    for split, loader in [("train", train_loader), ("val", val_loader)]:
+        total_loss = 0
+        for i, (images, latex_labels) in enumerate(loader):
+            if i >= eval_iters:
+                break
+            
+            images = images.to(device)
+            
+            # Tokenize LaTeX labels
+            targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
+            targets = targets.to(device)
+            
+            # Forward pass
+            combined_model = CombinedModel(densenet_model, model)
+            outputs = combined_model(images=images, targets=targets)
+            loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
+            
+            total_loss += loss.item()
+        
+        avg_loss = total_loss / min(eval_iters, len(loader))
+        results[split] = avg_loss
+
+    combined_model.train()
+    return results
 
 
 # ----------------- DO NOT CHANGE -------------------------------------
@@ -344,33 +353,9 @@ local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 
-# Define the DenseNet169 model
-densenet_model = models.densenet169(pretrained=True)
 
-# Remove the final fully connected layer to get the final feature maps
-densenet_model = nn.Sequential(*list(densenet_model.children())[:-1])
-densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 800, 400)) # hardcoded this based on denseNet output size
-densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, 768))
-
-# Move the DenseNet model to the correct device
-densenet_model = densenet_model.to(device)
-
-# Wrap the original model to include the DenseNet model as the first layers
-class CombinedModel(nn.Module):
-    def __init__(self, densenet_model, original_model):
-        super(CombinedModel, self).__init__()
-        self.densenet_model = densenet_model
-        self.original_model = original_model
-
-    def forward(self, images, targets):
-        embeddings = self.densenet_model(images)
-        outputs = self.original_model(input_embd=embeddings, targets=targets)
-        return outputs
-
-# Replace the original model with the combined model
 
 model.train()
-
 
 for epoch in range(num_epochs):
 
@@ -432,10 +417,8 @@ for epoch in range(num_epochs):
             # Forward pass
             with ctx:
                 model = CombinedModel(densenet_model, model)
-                # outputs = model(images=images, targets=targets)
-                # loss = outputs.loss / gradient_accumulation_steps
                 outputs = model(images=images, targets=targets)
-                loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
+                loss = outputs.loss / gradient_accumulation_steps
         
             # Backward pass
             scaler.scale(loss).backward()
