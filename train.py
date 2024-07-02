@@ -184,14 +184,14 @@ elif init_from == 'resume':
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
 
-elif init_from.startswith('gpt2'):
-    print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
-    # initialize from OpenAI GPT-2 weights
-    override_args = dict(dropout=dropout)
-    model = GPT.from_pretrained(init_from, override_args)
-    # read off the created config params, so we can store them into checkpoint correctly
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = getattr(model.config, k)
+# elif init_from.startswith('gpt2'):
+#     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
+#     # initialize from OpenAI GPT-2 weights
+#     override_args = dict(dropout=dropout)
+#     model = GPT.from_pretrained(init_from, override_args)
+#     # read off the created config params, so we can store them into checkpoint correctly
+#     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+#         model_args[k] = getattr(model.config, k)
 
 # ----------------------------------------------------------------------------
 
@@ -254,12 +254,13 @@ class CombinedModel(nn.Module):
         return outputs
 
 # Replace the original model with the combined model
-num_epochs = 1
+num_epochs = 3
 global_step = 0
 max_length = 300
 
 # INITALIZE THE TOKENIZER HERE !!!!!!
-tokenizer = AutoTokenizer.from_pretrained("witiko/mathberta")
+tokenizer = model.tokenizer
+# tokenizer = AutoTokenizer.from_pretrained("witiko/mathberta")
 
 def tokenize_latex(latex_text, max_length):
     toks = tokenizer(latex_text, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
@@ -289,8 +290,8 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-Test/spe/', label_file='../data/UniMER-Test/spe.txt')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images/', label_file='./data/UniMER-1M/train.txt')
+val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt')
 
 # Evaluation function
 @torch.no_grad()
