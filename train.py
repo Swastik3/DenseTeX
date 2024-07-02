@@ -39,9 +39,9 @@ from torchvision.models import DenseNet169_Weights
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
 out_dir = 'out'
-eval_interval = 2000
+eval_interval = 1
 log_interval = 1
-eval_iters = 200
+eval_iters = 5
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -51,9 +51,9 @@ wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
 dataset = 'openwebtext'
-gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
-batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
-block_size = 1024
+gradient_accumulation_steps = 1 # 5 * 8 # used to simulate larger batch sizes
+batch_size = 1 # if gradient_accumulation_steps > 1, this is the micro-batch size
+block_size = 300 # max token length
 # model
 n_layer = 12
 n_head = 12
@@ -62,7 +62,7 @@ dropout = 0.1 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
-max_iters = 600000 # total number of training iterations
+max_iters = 10 # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
@@ -235,7 +235,7 @@ densenet_model = models.densenet169(weights=DenseNet169_Weights.IMAGENET1K_V1) #
 
 # Remove the final fully connected layer to get the final feature maps
 densenet_model = nn.Sequential(*list(densenet_model.children())[:-1])
-densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 800, 400)) # hardcoded this based on denseNet output size
+densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 12, 25)) # hardcoded this based on denseNet output size
 densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, 768))
 
 # Move the DenseNet model to the correct device
@@ -254,8 +254,9 @@ class CombinedModel(nn.Module):
         return outputs
 
 # Replace the original model with the combined model
-num_epochs = 10
+num_epochs = 1
 global_step = 0
+max_length = 300
 
 # INITALIZE THE TOKENIZER HERE !!!!!!
 tokenizer = AutoTokenizer.from_pretrained("witiko/mathberta")
@@ -288,15 +289,15 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=32, image_dir='../../UniMER-1M/images/', label_file='../../UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=32, image_dir='../../UniMER-1M/images/', label_file='../../UniMER-1M/val.txt')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='/Users/marmik/UniMER-1M/images/', label_file='/Users/marmik/UniMER-1M/train.txt')
+val_loader = get_dataloader(batch_size=batch_size, image_dir='/Users/marmik/UniMER-Test/spe/', label_file='/Users/marmik/UniMER-Test/spe.txt')
 
 # Evaluation function
 @torch.no_grad()
 
 # calculate loss on train and val sets
-def evaluate(model, train_loader, val_loader, device, eval_iters=100):
-    model.eval()
+def evaluate(inp_model , train_loader, val_loader, device, eval_iters=100):
+    inp_model.eval()
     results = {}
 
     for split, loader in [("train", train_loader), ("val", val_loader)]:
@@ -308,12 +309,14 @@ def evaluate(model, train_loader, val_loader, device, eval_iters=100):
             images = images.to(device)
             
             # Tokenize LaTeX labels
-            targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
+            input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
+            input_ids = input_ids.to(device)
+            attention_mask = attention_mask.to(device)
             targets = targets.to(device)
             
             # Forward pass
-            combined_model = CombinedModel(densenet_model, model)
-            outputs = combined_model(images=images, targets=targets)
+            inp_model = CombinedModel(densenet_model, GPT(GPTConfig(**model_args)))
+            outputs = inp_model(images=images, targets=targets)
             loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
             
             total_loss += loss.item()
@@ -321,7 +324,7 @@ def evaluate(model, train_loader, val_loader, device, eval_iters=100):
         avg_loss = total_loss / min(eval_iters, len(loader))
         results[split] = avg_loss
 
-    combined_model.train()
+    inp_model.train()
     return results
 
 
@@ -355,17 +358,26 @@ raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 
 
+max_batches = 10
+
+model = CombinedModel(densenet_model, GPT(GPTConfig(**model_args)))
 
 model.train()
 
 for epoch in range(num_epochs):
 
-    for images, latex_labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
+    for batch_idx, (images, latex_labels) in enumerate(train_loader):
+
+    # for batch_idx, (images, latex_labels) in enumerate(tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
+
+        if batch_idx >= max_batches:
+            break
+        
         # Get the image embeddings and the latex labels
         images = images.to(device)
         
         # Tokenize LaTeX labels
-        input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
+        input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
         targets = targets.to(device)
@@ -378,7 +390,7 @@ for epoch in range(num_epochs):
         # Evaluation and checkpointing
         if iter_num % eval_interval == 0 and master_process:
             model.eval()
-            losses = evaluate(model, val_loader, device)
+            losses = evaluate(model, train_loader, val_loader, device = 'cpu')
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             model.train()
             
@@ -417,7 +429,7 @@ for epoch in range(num_epochs):
 
             # Forward pass
             with ctx:
-                model = CombinedModel(densenet_model, model)
+                model = CombinedModel(densenet_model, GPT(GPTConfig(**model_args)))
                 outputs = model(images=images, targets=targets)
                 loss = outputs[1] / gradient_accumulation_steps # CHANGED IT HERE !!
         
