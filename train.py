@@ -52,7 +52,7 @@ wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
 dataset = 'openwebtext'
 gradient_accumulation_steps = 1 # 5 * 8 # used to simulate larger batch sizes
-batch_size = 1 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 5 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 300 # max token length
 # model
 n_layer = 12
@@ -289,43 +289,43 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='/Users/marmik/BuildSpaceResearch/data/UniMER-1M/images/', label_file='/Users/marmik/BuildSpaceResearch/data/UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=batch_size, image_dir='/Users/marmik/BuildSpaceResearch/data/UniMER-Test/spe/', label_file='/Users/marmik/BuildSpaceResearch/data/UniMER-Test/spe.txt')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt')
+val_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-Test/spe/', label_file='../data/UniMER-Test/spe.txt')
 
 # Evaluation function
 @torch.no_grad()
 
-# calculate loss on train and val sets
-def evaluate(inp_model , train_loader, val_loader, device, eval_iters=100):
-    inp_model.eval()
-    results = {}
+# # calculate loss on train and val sets
+# def evaluate(inp_model , train_loader, val_loader, device, eval_iters=100):
+#     inp_model.eval()
+#     results = {}
 
-    for split, loader in [("train", train_loader), ("val", val_loader)]:
-        total_loss = 0
-        for i, (images, latex_labels) in enumerate(loader):
-            if i >= eval_iters:
-                break
+#     for split, loader in [("train", train_loader), ("val", val_loader)]:
+#         total_loss = 0
+#         for i, (images, latex_labels) in enumerate(loader):
+#             if i >= eval_iters:
+#                 break
             
-            images = images.to(device)
+#             images = images.to(device)
             
-            # Tokenize LaTeX labels
-            input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
-            input_ids = input_ids.to(device)
-            attention_mask = attention_mask.to(device)
-            targets = targets.to(device)
+#             # Tokenize LaTeX labels
+#             input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
+#             input_ids = input_ids.to(device)
+#             attention_mask = attention_mask.to(device)
+#             targets = targets.to(device)
             
-            # Forward pass
-            # inp_model = CombinedModel(densenet_model, model)
-            outputs = inp_model(images=images, targets=targets)
-            loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
+#             # Forward pass
+#             # inp_model = CombinedModel(densenet_model, model)
+#             outputs = inp_model(images=images, targets=targets)
+#             loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
             
-            total_loss += loss.item()
+#             total_loss += loss.item()
         
-        avg_loss = total_loss / min(eval_iters, len(loader))
-        results[split] = avg_loss
+#         avg_loss = total_loss / min(eval_iters, len(loader))
+#         results[split] = avg_loss
 
-    inp_model.train()
-    return results
+#     inp_model.train()
+#     return results
 
 
 # ----------------- DO NOT CHANGE -------------------------------------
@@ -375,13 +375,13 @@ for epoch in range(num_epochs):
         
         # Get the image embeddings and the latex labels
 
-        print('1')
+        # print('1')
         images = images.to(device)
         
         # Tokenize LaTeX labels
         input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
 
-        print('2')
+        # print('2')
 
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
@@ -390,52 +390,55 @@ for epoch in range(num_epochs):
         # Determine and set the learning rate for this iteration
         lr = get_lr(iter_num) if decay_lr else learning_rate
 
-        print('3')
+        # print('3')
 
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
         # Evaluation and checkpointing
 
-        print('4')
+        # print('4')
 
 
-        if iter_num % eval_interval == 0 and master_process:
-            model.eval()
-            losses = evaluate(model, train_loader, val_loader, device = device, eval_iters = eval_iters)
-            print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-            model.train()
+        # # if iter_num % eval_interval == 0 and master_process:
+        # model.eval()
+        # with torch.no_grad():
+        #         outputs = model(images=images, targets=targets)
+        #         loss = outputs[1]
+        #     losses = evaluate(model, train_loader, val_loader, device = device, eval_iters = eval_iters)
+        #     print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        #     model.train()
 
-            print('5')
+        #     print('5')
             
-            if wandb_log:
-                wandb.log({
-                    "iter": iter_num,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "lr": lr,
-                })
+        #     if wandb_log:
+        #         wandb.log({
+        #             "iter": iter_num,
+        #             "train/loss": losses['train'],
+        #             "val/loss": losses['val'],
+        #             "lr": lr,
+        #         })
             
-            if losses['val'] < best_val_loss or always_save_checkpoint:
-                best_val_loss = losses['val']
-                if iter_num > 0:
-                    checkpoint = {
-                        'model': model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'model_args': model_args,
-                        'iter_num': iter_num,
-                        'best_val_loss': best_val_loss,
-                        'config': config,
-                    }
-                    print(f"saving checkpoint to {out_dir}")
-                    torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+        #     # if losses['val'] < best_val_loss or always_save_checkpoint:
+        #     #     best_val_loss = losses['val']
+        #     #     if iter_num > 0:
+        #     #         checkpoint = {
+        #     #             'model': model.state_dict(),
+        #     #             'optimizer': optimizer.state_dict(),
+        #     #             'model_args': model_args,
+        #     #             'iter_num': iter_num,
+        #     #             'best_val_loss': best_val_loss,
+        #     #             'config': config,
+        #     #         }
+        #     #         print(f"saving checkpoint to {out_dir}")
+        #     #         torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
         
         # Forward backward update, with optional gradient accumulation
         for micro_step in range(gradient_accumulation_steps):
 
             if ddp:
 
-                print('6')
+                # print('6')
             # in DDP training we only need to sync gradients at the last micro step.
             # the official way to do this is with model.no_sync() context manager, but
             # I really dislike that this bloats the code and forces us to repeat code
@@ -449,33 +452,53 @@ for epoch in range(num_epochs):
             with ctx:
                 # model = CombinedModel(densenet_model, model)
 
-                print('7')
+                # print('7')
 
                 outputs = model(images=images, targets=targets)
+
+                if isinstance(outputs, tuple):
+                    logits, loss = outputs
+
+                else :
+                    logits, loss = outputs, None
+
+
+                sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
+
+                non_pad_mask = sample_prediction != tokenizer.pad_token_id
+                decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
+
+                print(f"Sample non-padded prediction: {decoded_prediction}")
 
 
                 loss = outputs[1] / gradient_accumulation_steps 
 
-                print('8')
+                # print('8')
         
             # Backward pass
             scaler.scale(loss).backward()
 
 
-            print('9')
+            # print('9')
         
         # Clip the gradient
         if grad_clip != 0.0:
 
-            print('10')
-            
+            # print('10')
+
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         
         # Step the optimizer and scaler if training in fp16
+
+        # print('11')
         scaler.step(optimizer)
+
+        # print('12')
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
+
+        # print('13')
         
         # Timing and logging
         t1 = time.time()
@@ -484,19 +507,32 @@ for epoch in range(num_epochs):
 
 
         if iter_num % log_interval == 0 and master_process:
+
+
+            # print('14') 
             # get loss as float. note: this is a CPU-GPU sync point
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
 
             lossf = loss.item() * gradient_accumulation_steps
 
+            # print('15')
+
             if local_iter_num >= 5 :
                 mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
+
+                # print('16')
                 running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+
+                # print('17') 
             
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+
+            # print('17')
         
         iter_num += 1
         local_iter_num += 1
+
+        # print('18')
         
         # termination condition
         if iter_num > max_iters:
