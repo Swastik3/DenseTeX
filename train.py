@@ -289,8 +289,8 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='/Users/marmik/UniMER-1M/images/', label_file='/Users/marmik/UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=batch_size, image_dir='/Users/marmik/UniMER-Test/spe/', label_file='/Users/marmik/UniMER-Test/spe.txt')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='/Users/marmik/BuildSpaceResearch/data/UniMER-1M/images/', label_file='/Users/marmik/BuildSpaceResearch/data/UniMER-1M/train.txt')
+val_loader = get_dataloader(batch_size=batch_size, image_dir='/Users/marmik/BuildSpaceResearch/data/UniMER-Test/spe/', label_file='/Users/marmik/BuildSpaceResearch/data/UniMER-Test/spe.txt')
 
 # Evaluation function
 @torch.no_grad()
@@ -315,7 +315,7 @@ def evaluate(inp_model , train_loader, val_loader, device, eval_iters=100):
             targets = targets.to(device)
             
             # Forward pass
-            inp_model = CombinedModel(densenet_model, GPT(GPTConfig(**model_args)))
+            # inp_model = CombinedModel(densenet_model, model)
             outputs = inp_model(images=images, targets=targets)
             loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
             
@@ -360,8 +360,8 @@ running_mfu = -1.0
 
 max_batches = 10
 
-model = CombinedModel(densenet_model, GPT(GPTConfig(**model_args)))
-
+# model = CombinedModel(densenet_model, GPT(GPTConfig(**model_args)))
+model = CombinedModel(densenet_model, model)
 model.train()
 
 for epoch in range(num_epochs):
@@ -374,25 +374,39 @@ for epoch in range(num_epochs):
             break
         
         # Get the image embeddings and the latex labels
+
+        print('1')
         images = images.to(device)
         
         # Tokenize LaTeX labels
         input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
+
+        print('2')
+
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
         targets = targets.to(device)
         
         # Determine and set the learning rate for this iteration
         lr = get_lr(iter_num) if decay_lr else learning_rate
+
+        print('3')
+
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
         # Evaluation and checkpointing
+
+        print('4')
+
+
         if iter_num % eval_interval == 0 and master_process:
             model.eval()
-            losses = evaluate(model, train_loader, val_loader, device = 'cpu')
+            losses = evaluate(model, train_loader, val_loader, device = device, eval_iters = eval_iters)
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             model.train()
+
+            print('5')
             
             if wandb_log:
                 wandb.log({
@@ -420,24 +434,41 @@ for epoch in range(num_epochs):
         for micro_step in range(gradient_accumulation_steps):
 
             if ddp:
+
+                print('6')
             # in DDP training we only need to sync gradients at the last micro step.
             # the official way to do this is with model.no_sync() context manager, but
             # I really dislike that this bloats the code and forces us to repeat code
             # looking at the source of that context manager, it just toggles this variable
+
+
                 model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
 
 
             # Forward pass
             with ctx:
-                model = CombinedModel(densenet_model, GPT(GPTConfig(**model_args)))
+                # model = CombinedModel(densenet_model, model)
+
+                print('7')
+
                 outputs = model(images=images, targets=targets)
-                loss = outputs[1] / gradient_accumulation_steps # CHANGED IT HERE !!
+
+
+                loss = outputs[1] / gradient_accumulation_steps 
+
+                print('8')
         
             # Backward pass
             scaler.scale(loss).backward()
+
+
+            print('9')
         
         # Clip the gradient
         if grad_clip != 0.0:
+
+            print('10')
+            
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         

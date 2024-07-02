@@ -8,7 +8,7 @@ class PositionalEncoding2D(nn.Module):
         self.height = height
         self.width = width
         self.d_model = d_model
-        self.pe: torch.Tensor = self._get_positional_encoding(d_model, height, width)
+        self.pe: torch.Tensor = self._get_positional_encoding(d_model, height, width).unsqueeze(0)
 
     def _get_positional_encoding(self, d_model, height, width):
         """
@@ -49,7 +49,7 @@ class PositionalEncoding2D(nn.Module):
 
         print(f"PE shape: {self.pe.unsqueeze(0).shape}, X shape: {x.shape}")
 
-        x = x + self.pe.unsqueeze(0) #the unsqueeze() might not be necessary, idk
+        x = x + self.pe #the unsqueeze() might not be necessary, idk
 
     
         # plt.imshow(self.pe[100], cmap = "gray")
