@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from transformers import AutoTokenizer
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -134,11 +135,21 @@ class GPT(nn.Module):
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
 
-        # self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # Initialize the tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained("witiko/mathberta")
+        
+        # Update vocab_size based on the tokenizer
+        config.vocab_size = len(self.tokenizer)
+        
+        # Update the lm_head and token_embedding_layer
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-
-        # to create a separate embedding layer
         self.token_embedding_layer = nn.Embedding(config.vocab_size, config.n_embd)
+        
+        # # self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+        # # to create a separate embedding layer
+        # self.token_embedding_layer = nn.Embedding(config.vocab_size, config.n_embd)
         
         # weight tying
         self.token_embedding_layer.weight = self.lm_head.weight
@@ -212,6 +223,8 @@ class GPT(nn.Module):
 
         # loss calculation for targets will change according to tokenizer
         if targets is not None:
+            if isinstance(targets, str):
+                targets = self.tokenizer.encode(targets, add_special_tokens=True, return_tensors='pt').squeeze(0)
             # if we are given some desired targets also calculate the loss
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
@@ -370,6 +383,9 @@ class GPT(nn.Module):
             # Add the sampled token to our generated sequence
             generated_tokens[:, i] = next_token.view(-1)
             
+            # Convert the generated token to its string representation
+            generated_text = self.tokenizer.decode(generated_tokens[0, :i+1])
+            
             # Prepare for the next iteration:
             # Embed the newly generated token
             next_token_embedding = self.token_embedding(next_token).view(1, 1, -1)
@@ -380,8 +396,12 @@ class GPT(nn.Module):
             # If the sequence is getting too long, remove the oldest token embedding
             if current_seq.size(1) > self.config.block_size:
                 current_seq = current_seq[:, 1:]
-        
-        return generated_tokens
+
+            # If we've generated an end token or reached max length, stop
+            if self.tokenizer.eos_token in generated_text or i == max_new_tokens - 1:
+                break
+            
+        return self.tokenizer.decode(generated_tokens[0, :i+1])
     
 
     def token_embedding(self, tokens):
@@ -391,6 +411,8 @@ class GPT(nn.Module):
         """
         # This is a placeholder. You need to implement this based on your model's architecture.
         # It might involve using the weights from self.lm_head or a separate embedding layer.
-
-
+        
+        # If tokens are not already tensor ids, encode them
+        if isinstance(tokens, str):
+            tokens = self.tokenizer.encode(tokens, add_special_tokens=True, return_tensors='pt').squeeze(0)
         return self.token_embedding_layer(tokens)

@@ -31,6 +31,7 @@ from torch.utils.data import DataLoader, Dataset
 from model import GPTConfig, GPT
 from torchvision import models
 from encoder.DenseNet import PositionalEncoding2D, InputEmbeddings
+from transformers import AutoTokenizer
 
 # HYPERPARAMETERS
 
@@ -231,20 +232,33 @@ num_epochs = 10
 global_step = 0
 
 # INITALIZE THE TOKENIZER HERE !!!!!!
+tokenizer = AutoTokenizer.from_pretrained("witiko/mathberta")
 
-def tokenize_latex(latex_text, max_length) :
-
-    toks = OurTokenizer(latex_text, padding = 'max_length', truncation = True, max_length = max_length, return_tensors = 'pt')
-    input_ids = toks.input_ids # shape : (batch_size, sequence_length)
-
-    attention_mask = toks.attention_mask # 1 for real tokens, 0 for padding tokens
-
+def tokenize_latex(latex_text, max_length):
+    encoded = tokenizer(latex_text, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
+    input_ids = encoded['input_ids']
+    attention_mask = encoded['attention_mask']
+    
     targets = input_ids.clone()
-
+    # Shift targets to the right, filling in with pad token
     targets[:, :-1] = input_ids[:, 1:]
-    targets[:, -1] = -100 # ignore the last token in prediction
-
+    targets[:, -1] = tokenizer.pad_token_id
+    
     return input_ids, attention_mask, targets
+
+# def tokenize_latex(latex_text, max_length) :
+
+#     toks = OurTokenizer(latex_text, padding = 'max_length', truncation = True, max_length = max_length, return_tensors = 'pt')
+#     input_ids = toks.input_ids # shape : (batch_size, sequence_length)
+
+#     attention_mask = toks.attention_mask # 1 for real tokens, 0 for padding tokens
+
+#     targets = input_ids.clone()
+
+#     targets[:, :-1] = input_ids[:, 1:]
+#     targets[:, -1] = -100 # ignore the last token in prediction
+
+#     return input_ids, attention_mask, targets
 
 
 # get the dataloader
@@ -255,33 +269,50 @@ val_loader = get_dataloader(batch_size=32, image_dir='../../UniMER-1M/images/', 
 @torch.no_grad()
 
 # calculate loss on train and val sets
-def evaluate(model, train_loader, val_loader, device, eval_iters=100):
-    model.eval()
-    results = {}
+# def evaluate(model, train_loader, val_loader, device, eval_iters=100):
+#     model.eval()
+#     results = {}
 
-    for split, loader in [("train", train_loader), ("val", val_loader)]:
-        total_loss = 0
-        for i, (input_embed, latex_labels) in enumerate(loader):
-            if i >= eval_iters:
-                break
+#     for split, loader in [("train", train_loader), ("val", val_loader)]:
+#         total_loss = 0
+#         for i, (input_embed, latex_labels) in enumerate(loader):
+#             if i >= eval_iters:
+#                 break
             
-            input_embed = input_embed.to(device)
+#             input_embed = input_embed.to(device)
             
-            # Tokenize LaTeX labels
-            targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
-            targets = targets.to(device)
+#             # Tokenize LaTeX labels
+#             targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
+#             targets = targets.to(device)
             
-            # Forward pass
-            outputs = model(input_embd=input_embed, targets=targets)
-            loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
+#             # Forward pass
+#             outputs = model(input_embd=input_embed, targets=targets)
+#             loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
             
-            total_loss += loss.item()
+#             total_loss += loss.item()
         
-        avg_loss = total_loss / min(eval_iters, len(loader))
-        results[split] = avg_loss
+#         avg_loss = total_loss / min(eval_iters, len(loader))
+#         results[split] = avg_loss
 
-    model.train()
-    return results
+#     model.train()
+#     return results
+
+def evaluate(model, data_loader, device):
+    model.eval()
+    total_loss = 0
+    for images, latex_labels in data_loader:
+        images = images.to(device)
+        input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
+        targets = targets.to(device)
+        
+        outputs = model(images=images, targets=targets)
+        loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
+        total_loss += loss.item()
+    
+    return total_loss / len(data_loader)
+
 
 
 # ----------------- DO NOT CHANGE -------------------------------------
@@ -349,6 +380,8 @@ for epoch in range(num_epochs):
         
         # Tokenize LaTeX labels
         input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=model.config.block_size)
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
         targets = targets.to(device)
         
         # Determine and set the learning rate for this iteration
@@ -399,9 +432,11 @@ for epoch in range(num_epochs):
             # Forward pass
             with ctx:
                 model = CombinedModel(densenet_model, model)
+                # outputs = model(images=images, targets=targets)
+                # loss = outputs.loss / gradient_accumulation_steps
                 outputs = model(images=images, targets=targets)
-                loss = outputs.loss / gradient_accumulation_steps
-            
+                loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
+        
             # Backward pass
             scaler.scale(loss).backward()
         
