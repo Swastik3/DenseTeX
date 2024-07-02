@@ -125,9 +125,15 @@ def test_training_setup():
                 logits, loss = outputs, None
 
 
-            sample_prediction = logits[0].argmax(dim=-1)
-            decoded_prediction = tokenizer.decode(sample_prediction)
-            print(f"Sample prediction: {decoded_prediction}")
+            sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
+
+            non_pad_mask = sample_prediction != tokenizer.pad_token_id
+            decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
+
+            print(f"Sample non-padded prediction: {decoded_prediction}")
+
+            # decoded_prediction = tokenizer.decode(sample_prediction)
+            # print(f"Sample prediction: {decoded_prediction}")
 
 
             loss = outputs[1]
