@@ -8,6 +8,7 @@ from model import GPTConfig, GPT
 
 
 batch_size = 5
+num_epochs = 10
 
 def test_training_setup():
     print("Starting training setup test...")
@@ -113,7 +114,7 @@ def test_training_setup():
     # Test mini training loop
     try:
         combined_model.train()
-        for i in range(3):
+        for i in range(num_epochs):
             optimizer.zero_grad()
             outputs = combined_model(images=images, targets=targets)
 
