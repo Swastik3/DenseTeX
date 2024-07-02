@@ -32,6 +32,7 @@ from model import GPTConfig, GPT
 from torchvision import models
 from DenseNet import PositionalEncoding2D, InputEmbeddings
 from transformers import AutoTokenizer
+from torchvision.models import DenseNet169_Weights
 
 # HYPERPARAMETERS
 
@@ -230,7 +231,7 @@ from DataLoader import get_dataloader
 
 
 # Define the DenseNet169 model
-densenet_model = models.densenet169(pretrained=True)
+densenet_model = models.densenet169(weights=DenseNet169_Weights.IMAGENET1K_V1) # change to DEFAULT HERE
 
 # Remove the final fully connected layer to get the final feature maps
 densenet_model = nn.Sequential(*list(densenet_model.children())[:-1])
@@ -418,7 +419,7 @@ for epoch in range(num_epochs):
             with ctx:
                 model = CombinedModel(densenet_model, model)
                 outputs = model(images=images, targets=targets)
-                loss = outputs.loss / gradient_accumulation_steps
+                loss = outputs[1] / gradient_accumulation_steps # CHANGED IT HERE !!
         
             # Backward pass
             scaler.scale(loss).backward()

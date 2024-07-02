@@ -6,6 +6,9 @@ from DenseNet import PositionalEncoding2D, InputEmbeddings
 from DataLoader import get_dataloader
 from model import GPTConfig, GPT
 
+
+batch_size = 5
+
 def test_training_setup():
     print("Starting training setup test...")
 
@@ -15,7 +18,7 @@ def test_training_setup():
 
     # Test data loading
     try:
-        train_loader = get_dataloader(batch_size=2, image_dir='/Users/marmik/UniMER-1M/images/', label_file='/Users/marmik/UniMER-1M/train.txt')
+        train_loader = get_dataloader(batch_size=batch_size, image_dir='/Users/marmik/UniMER-1M/images/', label_file='/Users/marmik/UniMER-1M/train.txt')
         images, latex_labels = next(iter(train_loader))
         print(f"Data loading successful. Image shape: {images.shape}, Labels: {latex_labels[:2]}")
     except Exception as e:
@@ -41,9 +44,11 @@ def test_training_setup():
         return input_ids, attention_mask, targets
 
     try:
-        input_ids, attention_mask, targets = tokenize_latex(latex_labels[:2], max_length=300)
-        
+        input_ids, attention_mask, targets = tokenize_latex(latex_labels[:batch_size], max_length=300)
+
         print(f"Tokenization successful. Input IDs shape: {input_ids.shape}")
+        print(tokenizer.tokenize(latex_labels[:2]))
+
     except Exception as e:
         print(f"Error in tokenization: {e}")
         return
@@ -56,9 +61,10 @@ def test_training_setup():
 
         densenet_model = models.densenet169(pretrained=True)
         densenet_model = nn.Sequential(*list(densenet_model.children())[:-1])
-        densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 800, 400))
+        densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 12, 25))
         densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, 768))
         print("DenseNet model initialized successfully")
+
     except Exception as e:
         print(f"Error in model initialization: {e}")
         return
@@ -72,6 +78,7 @@ def test_training_setup():
 
         def forward(self, images, targets):
             embeddings = self.densenet_model(images)
+            # print(f"Embeddings shape: {embeddings.shape}")
             outputs = self.original_model(input_embd=embeddings, targets=targets)
             return outputs
 
@@ -87,8 +94,10 @@ def test_training_setup():
     try:
         images = images.to(device)
         targets = targets.to(device)
+        print(f"Images shape: {images.shape}, Targets shape: {targets.shape}")
         outputs = combined_model(images, targets=targets)
-        print(f"Forward pass successful. Output shape: {outputs.loss.shape}")
+
+        print(f"Forward pass successful. Output shape: {outputs}")
     except Exception as e:
         print(f"Error in forward pass: {e}")
         return
@@ -107,7 +116,21 @@ def test_training_setup():
         for i in range(3):
             optimizer.zero_grad()
             outputs = combined_model(images=images, targets=targets)
-            loss = outputs.loss
+
+
+            if isinstance(outputs, tuple):
+                logits, loss = outputs
+
+            else :
+                logits, loss = outputs, None
+
+
+            sample_prediction = logits[0].argmax(dim=-1)
+            decoded_prediction = tokenizer.decode(sample_prediction)
+            print(f"Sample prediction: {decoded_prediction}")
+
+
+            loss = outputs[1]
             loss.backward()
             optimizer.step()
             print(f"Mini-batch {i+1}, Loss: {loss.item()}")

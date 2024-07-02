@@ -10,7 +10,7 @@ class PositionalEncoding2D(nn.Module):
         self.d_model = d_model
         self.pe: torch.Tensor = self._get_positional_encoding(d_model, height, width)
 
-    def _get_positional_encoding(self, d_model, width, height):
+    def _get_positional_encoding(self, d_model, height, width):
         """
         :param d_model: dimension of the model
         :param height: height of the positions
@@ -46,7 +46,11 @@ class PositionalEncoding2D(nn.Module):
         assert self.d_model == channels, "Dimension mismatch: d_model and input channels must be the same"
         # Add positional encodings to the input tensor
         self.pe = self.pe.to(x.device)
+
+        print(f"PE shape: {self.pe.unsqueeze(0).shape}, X shape: {x.shape}, p")
+
         x = x + self.pe.unsqueeze(0) #the unsqueeze() might not be necessary, idk
+
     
         # plt.imshow(self.pe[100], cmap = "gray")
         return x
