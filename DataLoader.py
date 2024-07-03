@@ -6,13 +6,14 @@ from PIL import Image
 import pickle
 
 class CustomDataset(Dataset):
-    def __init__(self, image_dir, label_file, transform=None, cache_file='valid_indices_cache.pkl'):
+    def __init__(self, image_dir, label_file, transform=None, cache_file='valid_indices_cache.pkl', shuffle=True):
         self.image_dir = image_dir
         self.transform = transform
         self.cache_file = cache_file
         with open(label_file, 'r', encoding='utf-8') as f:
             self.labels = f.readlines()
         self.valid_indices = self._load_or_create_valid_indices()
+        self.shuffle = True
 
     def _load_or_create_valid_indices(self):
         if os.path.exists(self.cache_file):

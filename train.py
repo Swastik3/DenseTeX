@@ -62,7 +62,7 @@ dropout = 0.1 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
-max_iters = 10 # total number of training iterations
+max_iters = 10000 # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
@@ -290,8 +290,8 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images/', label_file='./data/UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt')
+val_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-Test/spe/', label_file='../data/UniMER-Test/spe.txt')
 
 # Evaluation function
 @torch.no_grad()
@@ -359,7 +359,7 @@ raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 
 
-max_batches = 10
+max_batches = 100
 
 # model = CombinedModel(densenet_model, GPT(GPTConfig(**model_args)))
 model = CombinedModel(densenet_model, model)
@@ -371,8 +371,8 @@ for epoch in range(num_epochs):
 
     # for batch_idx, (images, latex_labels) in enumerate(tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
 
-        if batch_idx >= max_batches:
-            break
+        # if batch_idx >= max_batches:
+        #     break
         
         # Get the image embeddings and the latex labels
 
@@ -470,6 +470,7 @@ for epoch in range(num_epochs):
                 decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
 
                 print(f"Sample non-padded prediction: {decoded_prediction}")
+                print(f"Actual label: {latex_labels[0]}")
 
 
                 loss = outputs[1] / gradient_accumulation_steps 
@@ -518,15 +519,16 @@ for epoch in range(num_epochs):
 
             # print('15')
 
-            if local_iter_num >= 5 :
-                mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
+            # if local_iter_num >= 5 :
+                # mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
 
                 # print('16')
-                running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+                # running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
 
                 # print('17') 
             
-            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+            # print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
 
             # print('17')
         

@@ -47,7 +47,7 @@ class PositionalEncoding2D(nn.Module):
         # Add positional encodings to the input tensor
         self.pe = self.pe.to(x.device)
 
-        print(f"PE shape: {self.pe.unsqueeze(0).shape}, X shape: {x.shape}")
+        # print(f"PE shape: {self.pe.shape}, X shape: {x.shape}")
 
         x = x + self.pe #the unsqueeze() might not be necessary, idk
 
