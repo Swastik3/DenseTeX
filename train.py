@@ -19,7 +19,6 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 import os
 import time
 import math
-import pickle
 from contextlib import nullcontext
 import random
 import numpy as np
@@ -134,18 +133,6 @@ iter_num = 0
 best_val_loss = 1e9
 
 
-# If you need to create metadata:
-# def create_latex_metadata(data_dir, vocab_size, max_seq_length, input_shape):
-#     meta = {
-#         'vocab_size': vocab_size,
-#         'max_seq_length': max_seq_length,
-#         'input_shape': input_shape,
-#     }
-#     with open(os.path.join(data_dir, 'latex_meta.pkl'), 'wb') as f:
-#         pickle.dump(meta, f)
-#     print(f"Created metadata file with vocab_size = {vocab_size}, max_seq_length = {max_seq_length}, input_shape = {input_shape}")
-
-# create_latex_metadata('path/to/data_dir', vocab_size=50257, max_seq_length=1024, input_shape=(300, 768))
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=300,
@@ -188,14 +175,6 @@ elif init_from == 'resume':
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
 
-# elif init_from.startswith('gpt2'):
-#     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
-#     # initialize from OpenAI GPT-2 weights
-#     override_args = dict(dropout=dropout)
-#     model = GPT.from_pretrained(init_from, override_args)
-#     # read off the created config params, so we can store them into checkpoint correctly
-#     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-#         model_args[k] = getattr(model.config, k)
 
 # ----------------------------------------------------------------------------
 
@@ -291,30 +270,27 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-# train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt')
 # val_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-Test/spe/', label_file='../data/UniMER-Test/spe.txt')
 
 # get a very small subset of the entire dataset 
+# subset_size = 1024
 
-subset_size = 1024
+# def get_subset_dataloader(batch_size=batch_size, image_dir = '../data/UniMER-1M/images/', label_file = '../data/UniMER-1M/train.txt', subset_size = subset_size) :
 
+#     full_dataset = CustomDataset(image_dir = image_dir, label_file = label_file, transform = None, cache_file = 'valid_indices_cache.pkl')
 
-def get_subset_dataloader(batch_size=batch_size, image_dir = '../data/UniMER-1M/images/', label_file = '../data/UniMER-1M/train.txt', subset_size = subset_size) :
+#     # random select a subset of indices
+#     subset_indices = random.sample(range(len(full_dataset)), subset_size)
+#     #create a subset dataset
+#     subset_dataset = Subset(full_dataset, subset_indices)
+#     # create a dataloader for the subset
+#     subset_dataloader = DataLoader(subset_dataset, batch_size = batch_size, shuffle = True)
 
-    full_dataset = CustomDataset(image_dir = image_dir, label_file = label_file, transform = None, cache_file = 'valid_indices_cache.pkl')
+#     return subset_dataloader
 
-    # random select a subset of indices
-    subset_indices = random.sample(range(len(full_dataset)), subset_size)
-    #create a subset dataset
-    subset_dataset = Subset(full_dataset, subset_indices)
-    # create a dataloader for the subset
-    subset_dataloader = DataLoader(subset_dataset, batch_size = batch_size, shuffle = True)
-
-    return subset_dataloader
-
-
-# subset train_loader
-train_loader = get_subset_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt', subset_size=subset_size)
+# # subset train_loader
+# train_loader = get_subset_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt', subset_size=subset_size)
 
 
 # Evaluation function
@@ -383,9 +359,8 @@ raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 
 
-max_batches = 100
+# max_batches = 100
 
-# model = CombinedModel(densenet_model, GPT(GPTConfig(**model_args)))
 model = CombinedModel(densenet_model, model)
 model.train()
 
@@ -422,8 +397,6 @@ for epoch in range(num_epochs):
 
         # Evaluation and checkpointing
 
-        # print('4')
-
 
         # # if iter_num % eval_interval == 0 and master_process:
         # model.eval()
@@ -434,7 +407,6 @@ for epoch in range(num_epochs):
         #     print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         #     model.train()
 
-        #     print('5')
             
         #     if wandb_log:
         #         wandb.log({
@@ -475,9 +447,6 @@ for epoch in range(num_epochs):
 
             # Forward pass
             with ctx:
-                # model = CombinedModel(densenet_model, model)
-
-                # print('7')
 
                 outputs = model(images=images, targets=targets)
 
@@ -499,32 +468,24 @@ for epoch in range(num_epochs):
 
                 loss = outputs[1] / gradient_accumulation_steps 
 
-                # print('8')
         
             # Backward pass
             scaler.scale(loss).backward()
-
-
-            # print('9')
         
         # Clip the gradient
         if grad_clip != 0.0:
 
-            # print('10')
 
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         
         # Step the optimizer and scaler if training in fp16
 
-        # print('11')
         scaler.step(optimizer)
 
-        # print('12')
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
 
-        # print('13')
         
         # Timing and logging
         t1 = time.time()
@@ -535,31 +496,23 @@ for epoch in range(num_epochs):
         if iter_num % log_interval == 0 and master_process:
 
 
-            # print('14') 
             # get loss as float. note: this is a CPU-GPU sync point
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
 
             lossf = loss.item() * gradient_accumulation_steps
 
-            # print('15')
 
             # if local_iter_num >= 5 :
                 # mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
 
-                # print('16')
                 # running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-
-                # print('17') 
             
             # print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
 
-            # print('17')
         
         iter_num += 1
         local_iter_num += 1
-
-        # print('18')
         
         # termination condition
         if iter_num > max_iters:
