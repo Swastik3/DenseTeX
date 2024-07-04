@@ -21,7 +21,7 @@ import time
 import math
 import pickle
 from contextlib import nullcontext
-
+import random
 import numpy as np
 import torch
 import torch.nn as nn
@@ -33,6 +33,10 @@ from torchvision import models
 from DenseNet import PositionalEncoding2D, InputEmbeddings
 from transformers import AutoTokenizer
 from torchvision.models import DenseNet169_Weights
+from torch.utils.data import Subset
+from DataLoader import CustomDataset
+import tqdm
+from DataLoader import get_dataloader
 
 # HYPERPARAMETERS
 
@@ -226,9 +230,6 @@ if ddp:
 
 # ---------------------------------------------------------------------------
 
-import tqdm
-from DataLoader import get_dataloader
-
 
 # Define the DenseNet169 model
 densenet_model = models.densenet169(weights=DenseNet169_Weights.IMAGENET1K_V1) # change to DEFAULT HERE
@@ -290,8 +291,31 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-Test/spe/', label_file='../data/UniMER-Test/spe.txt')
+# train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt')
+# val_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-Test/spe/', label_file='../data/UniMER-Test/spe.txt')
+
+# get a very small subset of the entire dataset 
+
+subset_size = 1024
+
+
+def get_subset_dataloader(batch_size=batch_size, image_dir = '../data/UniMER-1M/images/', label_file = '../data/UniMER-1M/train.txt', subset_size = subset_size) :
+
+    full_dataset = CustomDataset(image_dir = image_dir, label_file = label_file, transform = None, cache_file = 'valid_indices_cache.pkl')
+
+    # random select a subset of indices
+    subset_indices = random.sample(range(len(full_dataset)), subset_size)
+    #create a subset dataset
+    subset_dataset = Subset(full_dataset, subset_indices)
+    # create a dataloader for the subset
+    subset_dataloader = DataLoader(subset_dataset, batch_size = batch_size, shuffle = True)
+
+    return subset_dataloader
+
+
+# subset train_loader
+train_loader = get_subset_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt', subset_size=subset_size)
+
 
 # Evaluation function
 @torch.no_grad()
