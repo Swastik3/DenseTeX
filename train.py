@@ -18,6 +18,7 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 
 import os
 import time
+import datetime
 import math
 from contextlib import nullcontext
 import random
@@ -40,6 +41,13 @@ from DataLoader import get_dataloader
 # HYPERPARAMETERS
 
 # default config values designed to train a gpt2 (124M) on OpenWebText
+
+# max train time
+max_train_time = 3 # in mins
+# logging
+log_file = 'training_log.txt'
+sample_interval = 10  # Log sample predictions every 100 iterations
+detailed_log_interval = 5  # Log detailed metrics every 10 iterations
 # I/O
 out_dir = 'out'
 eval_interval = 1
@@ -81,7 +89,6 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' if torch.cuda.is_available() else 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
-
 
 # --------------------------DO NOT CHANGE---------------------------------------
 # configuration parameters that are allowed to be overridden from command line
@@ -209,6 +216,13 @@ if ddp:
 
 # ---------------------------------------------------------------------------
 
+def log_info(message, also_print=False):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_message = f"[{timestamp}] {message}"
+    with open(log_file, 'a') as f:
+        f.write(log_message + '\n')
+    if also_print:
+        print(log_message)
 
 # Define the DenseNet169 model
 densenet_model = models.densenet169(weights=DenseNet169_Weights.IMAGENET1K_V1) # change to DEFAULT HERE
@@ -270,7 +284,7 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images/', label_file='../data/UniMER-1M/train.txt')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='data/UniMER-1M/images', label_file='data/UniMER-1M/train.txt')
 # val_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-Test/spe/', label_file='../data/UniMER-Test/spe.txt')
 
 # get a very small subset of the entire dataset 
@@ -363,11 +377,14 @@ running_mfu = -1.0
 
 model = CombinedModel(densenet_model, model)
 model.train()
-
+train_start_time = time.time()
 for epoch in range(num_epochs):
-
+    log_info(f"Starting epoch {epoch+1}/{num_epochs}", also_print=True)
+    
     for batch_idx, (images, latex_labels) in enumerate(train_loader):
-
+        if time.time() - train_start_time > max_train_time * 60:  # Convert minutes to seconds
+            log_info(f"Reached maximum training time of {max_train_time} minutes. Stopping training.", also_print=True)
+            break
     # for batch_idx, (images, latex_labels) in enumerate(tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
 
         # if batch_idx >= max_batches:
@@ -382,7 +399,6 @@ for epoch in range(num_epochs):
         input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
 
         # print('2')
-
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
         targets = targets.to(device)
@@ -434,55 +450,40 @@ for epoch in range(num_epochs):
         for micro_step in range(gradient_accumulation_steps):
 
             if ddp:
-
                 # print('6')
+            
             # in DDP training we only need to sync gradients at the last micro step.
             # the official way to do this is with model.no_sync() context manager, but
             # I really dislike that this bloats the code and forces us to repeat code
             # looking at the source of that context manager, it just toggles this variable
 
-
                 model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-
-
+            
             # Forward pass
             with ctx:
-
                 outputs = model(images=images, targets=targets)
-
                 if isinstance(outputs, tuple):
                     logits, loss = outputs
-
                 else :
                     logits, loss = outputs, None
 
-
                 sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
-
                 non_pad_mask = sample_prediction != tokenizer.pad_token_id
                 decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
-
-                print(f"Sample non-padded prediction: {decoded_prediction}")
-                print(f"Actual label: {latex_labels[0]}")
-
-
+                #print(f"Sample non-padded prediction: {decoded_prediction}")
+                #print(f"Actual label: {latex_labels[0]}")
                 loss = outputs[1] / gradient_accumulation_steps 
 
-        
             # Backward pass
             scaler.scale(loss).backward()
         
         # Clip the gradient
         if grad_clip != 0.0:
-
-
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         
         # Step the optimizer and scaler if training in fp16
-
         scaler.step(optimizer)
-
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
 
@@ -494,30 +495,50 @@ for epoch in range(num_epochs):
 
 
         if iter_num % log_interval == 0 and master_process:
-
-
             # get loss as float. note: this is a CPU-GPU sync point
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-
             lossf = loss.item() * gradient_accumulation_steps
-
-
+            
             # if local_iter_num >= 5 :
                 # mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
-
                 # running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-            
             # print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
 
-        
+        # Log detailed metrics
+        if iter_num % detailed_log_interval == 0:
+            lossf = loss.item() * gradient_accumulation_steps
+            log_info(f"Iteration {iter_num}, Epoch {epoch+1}, Batch {batch_idx+1}:")
+            log_info(f"  Loss: {lossf:.4f}")
+            log_info(f"  Learning rate: {lr:.6f}")
+            log_info(f"  Batch processing time: {dt*1000:.2f}ms")
+
+        # Log sample predictions
+        if iter_num % sample_interval == 0:
+            sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
+            non_pad_mask = sample_prediction != tokenizer.pad_token_id
+            decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
+            log_info(f"Sample prediction at iteration {iter_num}:")
+            log_info(f"  Predicted: {decoded_prediction}")
+            log_info(f"  Actual: {latex_labels[0]}")
+
+        # ... (keep existing code for optimization steps)
+
+        # Update the logging for the end of each iteration
+        if iter_num % log_interval == 0 and master_process:
+            lossf = loss.item() * gradient_accumulation_steps
+            log_info(f"Iteration {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms", also_print=True)
+
         iter_num += 1
         local_iter_num += 1
         
         # termination condition
         if iter_num > max_iters:
+            log_info(f"Reached maximum iterations ({max_iters}). Stopping training.", also_print=True)
             break
-    
+    if time.time() - train_start_time > max_train_time * 60:
+        print(f"Training time exceeded {max_train_time} minutes. Stopping training.")
+        break
 
 print(f"Training completed. Total iterations: {iter_num}")
 
