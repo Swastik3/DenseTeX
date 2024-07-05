@@ -272,7 +272,7 @@ def tokenize_latex(latex_text, max_length):
 
 # get the dataloader
 train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt')
+val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
 
 # get a very small subset of the entire dataset 
 # subset_size = 1024
@@ -402,20 +402,20 @@ for epoch in range(num_epochs):
             with torch.no_grad():
                 val_loss = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
 
-            print(f"step {iter_num}: val loss {val_loss['val']:.4f}")
+            print(f"step {iter_num}: val loss {val_loss:.4f}")
             model.train()
 
             
             if wandb_log:
                 wandb.log({
                     "iter": iter_num,
-                    "val/loss": val_loss['val'],
+                    "val/loss": val_loss,
                     "lr": lr,
                 })
-            
+
             # save the model if its the best so far
-            if val_loss['val'] < best_val_loss or always_save_checkpoint:
-                best_val_loss = val_loss['val']
+            if val_loss < best_val_loss or always_save_checkpoint:
+                best_val_loss = val_loss
 
                 if iter_num > 0:
                     checkpoint = {
@@ -487,9 +487,6 @@ for epoch in range(num_epochs):
             # print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
 
-        # Log detailed metrics
-        if iter_num % detailed_log_interval == 0:
-            lossf = loss.item() * gradient_accumulation_steps
             log_info(f"Iteration {iter_num}, Epoch {epoch+1}, Batch {batch_idx+1}:")
             log_info(f"  Loss: {lossf:.4f}")
             log_info(f"  Learning rate: {lr:.6f}")
