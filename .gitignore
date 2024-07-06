@@ -3,3 +3,6 @@ tokens.txt
 text.txt
 data/
 .DS_Store
+training_log.txt
+valid_indices_val.pkl
+out/

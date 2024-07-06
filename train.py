@@ -74,7 +74,7 @@ dropout = 0.1 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
-max_iters = 10000 # total number of training iterations
+max_iters = 100 # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
@@ -220,7 +220,7 @@ if ddp:
 def log_info(message, also_print=False):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_message = f"[{timestamp}] {message}"
-    with open(log_file, 'a') as f:
+    with open(log_file, 'a', encoding='utf-8') as f:
         f.write(log_message + '\n')
     if also_print:
         print(log_message)
@@ -271,8 +271,8 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images', label_file='../data/UniMER-1M/train.txt')
+val_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-Test/spe/', label_file='../data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
 
 # get a very small subset of the entire dataset 
 # subset_size = 1024
@@ -459,6 +459,9 @@ for epoch in range(num_epochs):
             # Backward pass
             scaler.scale(loss).backward()
         
+        # Calculate perplexity score
+        perplexity = torch.exp(loss)
+
         # Clip the gradient
         if grad_clip != 0.0:
             scaler.unscale_(optimizer)
@@ -489,6 +492,7 @@ for epoch in range(num_epochs):
 
             log_info(f"Iteration {iter_num}, Epoch {epoch+1}, Batch {batch_idx+1}:")
             log_info(f"  Loss: {lossf:.4f}")
+            log_info(f"  Perplexity: {perplexity.item():.4f}")
             log_info(f"  Learning rate: {lr:.6f}")
             log_info(f"  Batch processing time: {dt*1000:.2f}ms")
 
