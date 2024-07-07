@@ -6,3 +6,6 @@ data/
 training_log.txt
 valid_indices_val.pkl
 out/
+wandb/
+valid_indices_val_cache.pkl
+valid_indices_cache.pkl
