@@ -9,6 +9,10 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from transformers import AutoTokenizer
+from torchvision.models import DenseNet169_Weights
+from DenseNet import PositionalEncoding2D, InputEmbeddings
+from torchvision import models
+
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -74,6 +78,53 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(self.c_proj(y))
         return y
 
+    
+
+class CrossAttention(nn.Module):
+
+    def __init__(self, config):
+
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+
+        # key, query, value projections for all heads, but in a batch
+        self.key = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.query = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.value = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+
+        #output projection
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+
+        # regularization
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.dropout = config.dropout
+
+
+    def forward(self, x, encoder_output): 
+
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+        k = self.key(encoder_output).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = self.value(encoder_output).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # WHAT DO THE -1 MEAN HERE ?
+
+        # attention
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+        y = att @ v 
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+
+        # output projection 
+        y = self.resid_dropout(self.c_proj(y))
+
+        return y
+
+
+
 class MLP(nn.Module):
 
     def __init__(self, config):
@@ -90,6 +141,8 @@ class MLP(nn.Module):
         x = self.dropout(x)
         return x
 
+
+
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -97,11 +150,15 @@ class Block(nn.Module):
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.cross_attn = CrossAttention(config)
+        self.ln_3 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
+    def forward(self, x, encoder_output):
         x = x + self.attn(self.ln_1(x))
+        x = x + self.cross_attn(self.ln_2(x), encoder_output)
         x = x + self.mlp(self.ln_2(x))
+
         return x
 
 
@@ -214,7 +271,7 @@ class GPT(nn.Module):
         x = self.transformer.drop(input_embd)
 
         for block in self.transformer.h:
-            x = block(x)
+            x = block(x, encoder_output = input_embd)
 
         x = self.transformer.ln_f(x)
 
