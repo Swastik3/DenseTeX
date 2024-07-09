@@ -9,10 +9,6 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from transformers import AutoTokenizer
-from torchvision.models import DenseNet169_Weights
-from DenseNet import PositionalEncoding2D, InputEmbeddings
-from torchvision import models
-
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -88,9 +84,7 @@ class CrossAttention(nn.Module):
         assert config.n_embd % config.n_head == 0
 
         # key, query, value projections for all heads, but in a batch
-        self.key = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        self.query = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        self.value = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
 
         #output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
@@ -106,10 +100,20 @@ class CrossAttention(nn.Module):
     def forward(self, x, encoder_output): 
 
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        # _, T_enc, _ = encoder_output.size()
 
-        k = self.key(encoder_output).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = self.value(encoder_output).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # WHAT DO THE -1 MEAN HERE ?
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # q = self.c_attn(x).split(self.n_embd, dim=2)[0]
+        # k, v = self.c_attn(encoder_output).split(self.n_embd, dim=2)[1:]
+        
+        # k = k.view(B, T_enc, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T_enc, hs)
+        # q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # v = v.view(B, T_enc, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T_enc, hs)
 
         # attention
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -173,7 +177,7 @@ class GPTConfig:
     dropout: float = 0.1
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster    
     block_size: int = 300  # Set to match the first dimension of our embeddings
-    vocab_size: int = 50257 #1000   # Set this to the number of classes in your task basically means the number of tokens in your vocabulary
+    vocab_size: int = 50257   # Set this to the number of classes in your task basically means the number of tokens in your vocabulary
 
 
 class GPT(nn.Module):
@@ -201,12 +205,6 @@ class GPT(nn.Module):
         # Update the lm_head and token_embedding_layer
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.token_embedding_layer = nn.Embedding(config.vocab_size, config.n_embd)
-        
-        # # self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-
-        # # to create a separate embedding layer
-        # self.token_embedding_layer = nn.Embedding(config.vocab_size, config.n_embd)
         
         # weight tying
         self.token_embedding_layer.weight = self.lm_head.weight
@@ -351,12 +349,20 @@ class GPT(nn.Module):
         device = image_embedding.device
         
         # Start with just the image embedding
-        current_seq = image_embedding
+        text_seq = torch.zeros((1, 0, self.config.n_embd), device=device)
+
         
         # Initialize an empty tensor to store generated tokens
         generated_tokens = torch.zeros((1, max_new_tokens), dtype=torch.long, device=device)
         
         for i in range(max_new_tokens):
+
+            # Concatenate the image embedding with the current sequence
+            current_seq = torch.cat([image_embedding, text_seq], dim=1)
+
+            # ensure the sequence does not exceed block size
+            if current_seq.size(1) > self.config.block_size:
+                current_seq = current_seq[:, -self.config.block_size:]
 
             # Forward pass through the model
             logits, _ = self(current_seq)

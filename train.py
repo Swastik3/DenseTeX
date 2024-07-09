@@ -271,8 +271,8 @@ def tokenize_latex(latex_text, max_length):
 
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-1M/images', label_file='../data/UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=batch_size, image_dir='../data/UniMER-Test/spe/', label_file='../data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt')
+val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
 
 # get a very small subset of the entire dataset 
 # subset_size = 1024
