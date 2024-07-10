@@ -39,7 +39,7 @@ from torchtext.data.metrics import bleu_score
 
 TORCH_LOGS="+dynamo"
 # max train time
-max_train_time = 3 # in mins
+max_train_time = 60 # in mins
 # logging
 log_file = 'training_log.txt'
 sample_interval = 10  # Log sample predictions every 100 iterations
@@ -50,7 +50,7 @@ eval_interval = 1
 log_interval = 1
 eval_iters = 5
 eval_only = False # if True, script exits right after the first eval
-always_save_checkpoint = True # if True, always save a checkpoint after each eval
+always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = True # disabled by default
@@ -59,7 +59,7 @@ wandb_run_name = 'run' + str(time.time())
 # data
 dataset = 'UniMER'
 gradient_accumulation_steps = 1 # 5 * 8 # used to simulate larger batch sizes
-batch_size = 1 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 5 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 300 # max token length
 # model
 n_layer = 12
@@ -128,9 +128,6 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 # note: float16 data type will automatically use a GradScaler
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
-# -----------------------------------------------------------------------------
-
-
 
 
 # model init
@@ -235,6 +232,7 @@ def tokenize_latex(latex_text, max_length):
     targets[:, -1] = tokenizer.pad_token_id
     
     return input_ids, attention_mask, targets
+
 # logging results to a txt file
 def log_info(message, also_print=False):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -248,7 +246,7 @@ def log_info(message, also_print=False):
 train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt')
 val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
 
-max_n = 4 # max n-gram for BLEU score
+max_n = 1 # max n-gram for BLEU score
 # Evaluation function
 @torch.no_grad()
 
@@ -260,6 +258,7 @@ def evaluate(model , val_loader, device, eval_iters=eval_iters):
     num_batches = 0
     total_bleu = 0
     total_f1 = 0
+    
     for i, (images, latex_labels) in enumerate(val_loader):
         if i >= eval_iters:
             break
@@ -280,7 +279,6 @@ def evaluate(model , val_loader, device, eval_iters=eval_iters):
             logits = outputs[0]
         else :
             logits = outputs
-        print("Logits", logits.shape)
 
         tempbleu = 0; count = 0
         micro_f1_score = 0
@@ -301,12 +299,13 @@ def evaluate(model , val_loader, device, eval_iters=eval_iters):
         
         loss = outputs[1] / gradient_accumulation_steps 
         total_loss += loss.item()
-        num_batches += 1   
+        num_batches += 1  
+
     avg_loss = total_loss / num_batches
     avg_bleu = total_bleu / num_batches
     avg_f1 = total_f1 / num_batches
     model.train()
-    print("avg bleu" , avg_bleu)
+
     return avg_loss, avg_bleu, avg_f1
 
 # learning rate decay scheduler (cosine with warmup)
@@ -331,7 +330,7 @@ if wandb_log and master_process:
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
-running_mfu = -1.0
+
 
 model = CombinedModel(densenet_model, model)
 model.train()
@@ -363,18 +362,20 @@ for epoch in range(num_epochs):
 
         # Evaluation and checkpointing
         if iter_num % eval_interval == 0 and master_process:
-            model.eval()
             with torch.no_grad():
-                val_loss = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
+                val_loss, val_bleu, val_f1 = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
 
-            print(f"step {iter_num}: val loss {val_loss:.4f}")
-            model.train()
+            print(f"step {iter_num}: val loss {val_loss:.4f}, val BLEU {val_bleu:.4f}, val F1 {val_f1:.4f}")
+
 
             if wandb_log:
                 wandb.log({
                     "iter": iter_num,
                     "val/loss": val_loss,
                     "lr": lr,
+                    "val/bleu": val_bleu,
+                    "val/f1": val_f1,
+                    "val/ppl": math.exp(val_loss),
                 })
 
             # save the model if its the best so far
@@ -409,13 +410,17 @@ for epoch in range(num_epochs):
                 sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
                 non_pad_mask = sample_prediction != tokenizer.pad_token_id
                 decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
-                loss = outputs[1] / gradient_accumulation_steps 
+                loss = outputs[1] / gradient_accumulation_steps
+
+                if wandb_log:
+                    wandb.log({
+                        "train/loss": loss,
+                        "train/ppl": math.exp(loss)
+                    })
 
             # Backward pass
             scaler.scale(loss).backward()
         
-        # Calculate perplexity score
-        perplexity = torch.exp(loss)
 
         # Clip the gradient
         if grad_clip != 0.0:
@@ -439,14 +444,16 @@ for epoch in range(num_epochs):
             
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
 
+        if iter_num % detailed_log_interval == 0:
+            lossf = loss.item() * gradient_accumulation_steps
             log_info(f"Iteration {iter_num}, Epoch {epoch+1}, Batch {batch_idx+1}:")
             log_info(f"  Loss: {lossf:.4f}")
-            log_info(f"  Perplexity: {perplexity.item():.4f}")
             log_info(f"  Learning rate: {lr:.6f}")
             log_info(f"  Batch processing time: {dt*1000:.2f}ms")
 
         # Log sample predictions
         if iter_num % sample_interval == 0:
+
             sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
             non_pad_mask = sample_prediction != tokenizer.pad_token_id
             decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
