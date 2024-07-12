@@ -84,7 +84,10 @@ class CrossAttention(nn.Module):
         assert config.n_embd % config.n_head == 0
 
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.k = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.q = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.v = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        # self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
 
         #output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
@@ -100,20 +103,21 @@ class CrossAttention(nn.Module):
     def forward(self, x, encoder_output): 
 
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-        # _, T_enc, _ = encoder_output.size()
+        _, T_enc, _ = encoder_output.size()
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-
-        # q = self.c_attn(x).split(self.n_embd, dim=2)[0]
-        # k, v = self.c_attn(encoder_output).split(self.n_embd, dim=2)[1:]
-        
-        # k = k.view(B, T_enc, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T_enc, hs)
+        # q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        # k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         # q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        # v = v.view(B, T_enc, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T_enc, hs)
+        # v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        q = self.q(x) #.split(self.n_embd, dim=2)[0]
+        k = self.k(encoder_output) #.split(self.n_embd, dim=2)[1:]
+        v = self.v(encoder_output)
+        
+        k = k.view(B, T_enc, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T_enc, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T_enc, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T_enc, hs)
 
         # attention
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))

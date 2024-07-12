@@ -39,16 +39,16 @@ from torchtext.data.metrics import bleu_score
 
 TORCH_LOGS="+dynamo"
 # max train time
-max_train_time = 60 # in mins
+max_train_time = 56 # in mins
 # logging
 log_file = 'training_log.txt'
-sample_interval = 10  # Log sample predictions every 100 iterations
-detailed_log_interval = 5  # Log detailed metrics every 10 iterations
+sample_interval = 100  # Log sample predictions every 100 iterations
+detailed_log_interval = 100  # Log detailed metrics every 10 iterations
 # I/O
 out_dir = 'out'
-eval_interval = 1
-log_interval = 1
-eval_iters = 5
+eval_interval = 2500
+log_interval = 20
+eval_iters = 90
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -59,25 +59,25 @@ wandb_run_name = 'run' + str(time.time())
 # data
 dataset = 'UniMER'
 gradient_accumulation_steps = 1 # 5 * 8 # used to simulate larger batch sizes
-batch_size = 5 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 64 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 300 # max token length
 # model
 n_layer = 12
 n_head = 12
 n_embd = 768
-dropout = 0.1 # for pretraining 0 is good, for finetuning try 0.1+
+dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
-max_iters = 100 # total number of training iterations
+max_iters = 800000 # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
-warmup_iters = 2000 # how many steps to warm up for
-lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
+warmup_iters = 5000 # how many steps to warm up for
+lr_decay_iters = 650000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
@@ -88,6 +88,7 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
+num_workers = 32 # number of DataLoader workers
 
 # configuration parameters that are allowed to be overridden from command line
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -134,62 +135,6 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=300,
                   bias=bias, dropout=dropout) # start with model_args from command line
 
-# initialization of model based on the arg init_from (resume, scratch, gpt2, etc.)
-if init_from == 'scratch':
-    # init a new model from scratch
-    print("Initializing a new model from scratch")
-
-    gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
-
-
-elif init_from == 'resume':
-
-    print(f"Resuming training from {out_dir}")
-    # resume training from a checkpoint.
-    ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-    checkpoint = torch.load(ckpt_path, map_location=device)
-    checkpoint_model_args = checkpoint['model_args']
-    # force these config attributes to be equal otherwise we can't even resume training
-    # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = checkpoint_model_args[k]
-    # create the model
-    gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
-    state_dict = checkpoint['model']
-    # fix the keys of the state dictionary :(
-    # honestly no idea how checkpoints sometimes get this prefix, have to debug more
-    unwanted_prefix = '_orig_mod.'
-    for k,v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    model.load_state_dict(state_dict)
-    iter_num = checkpoint['iter_num']
-    best_val_loss = checkpoint['best_val_loss']
-
-# move the model to the correct device
-model.to(device)
-
-# initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-
-# optimizer
-optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
-if init_from == 'resume':
-    optimizer.load_state_dict(checkpoint['optimizer'])
-checkpoint = None # free up memory
-
-# compile the model
-if compile:
-    print("compiling the model... (takes a ~minute)")
-    unoptimized_model = model
-    model = torch.compile(model) # requires PyTorch 2.0
-
-# wrap model into DDP container
-if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank])
-
 # Define the DenseNet169 model
 densenet_model = models.densenet169(weights=DenseNet169_Weights.IMAGENET1K_V1) # change to DEFAULT HERE
 
@@ -198,10 +143,13 @@ densenet_model = nn.Sequential(*list(densenet_model.children())[:-1])
 densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 12, 25)) # hardcoded this based on denseNet output size
 densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, 768))
 
-# Move the DenseNet model to the correct device
+gptconf = GPTConfig(**model_args)
+gpt_model = GPT(gptconf)# Move the DenseNet model to the correct device
+
 densenet_model = densenet_model.to(device)
 
-# Wrap the original model to include the DenseNet model as the first layers
+
+
 class CombinedModel(nn.Module):
     def __init__(self, densenet_model, original_model):
         super(CombinedModel, self).__init__()
@@ -212,14 +160,75 @@ class CombinedModel(nn.Module):
         embeddings = self.densenet_model(images)
         outputs = self.original_model(input_embd=embeddings, targets=targets)
         return outputs
+    
+    def load_state_dict(self, state_dict):
+
+        densenet_dict = {k.replace('densenet_model.', ''): v for k, v in state_dict.items() if k.startswith('densenet_model.')}
+        original_dict = {k.replace('original_model.', ''): v for k, v in state_dict.items() if k.startswith('original_model.')}
+
+        self.densenet_model.load_state_dict(densenet_dict)
+        self.original_model.load_state_dict(original_dict)
+
+model = CombinedModel(densenet_model, gpt_model)
+
+# initialization of model based on the arg init_from (resume, scratch, gpt2, etc.)
+if init_from == 'scratch':
+    # init a new model from scratch
+    print("Initializing a new model from scratch")
+
+    # gptconf = GPTConfig(**model_args)
+    # gpt_model = GPT(gptconf)
+    
+
+
+elif init_from == 'resume':
+    print(f"Resuming training from {out_dir}")
+    ckpt_path = os.path.join(out_dir, 'best_model.pt')
+    checkpoint = torch.load(ckpt_path, map_location=device)
+    
+    # Create the combined model
+    # gptconf = GPTConfig(**model_args)
+    # gpt_model = GPT(gptconf)
+    # model = CombinedModel(densenet_model, gpt_model)
+    
+    # Load the state dict
+    model.load_state_dict(checkpoint['model'])
+    
+    # Load other training state
+    iter_num = checkpoint['iter_num']
+    best_val_loss = checkpoint['best_val_loss']
+
+
+# move the model to the correct device
+model.to(device)
+
+# initialize a GradScaler. If enabled=False scaler is a no-op
+scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+
+# optimizer
+optimizer = gpt_model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+if init_from == 'resume':
+    optimizer.load_state_dict(checkpoint['optimizer'])
+checkpoint = None # free up memory
+
+# compile the model
+if compile:
+    print("compiling the model... (takes a ~minute)")
+    unoptimized_model = gpt_model
+    model = torch.compile(model) # requires PyTorch 2.0
+
+# wrap model into DDP container
+if ddp:
+    model = DDP(model, device_ids=[ddp_local_rank])
+
 
 # Replace the original model with the combined model
-num_epochs = 3
+num_epochs = 100
 global_step = 0
 max_length = 300
 
 # Load the tokenizer
-tokenizer = model.tokenizer
+tokenizer = gpt_model.tokenizer
 
 def tokenize_latex(latex_text, max_length):
     toks = tokenizer(latex_text, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
@@ -243,10 +252,10 @@ def log_info(message, also_print=False):
         print(log_message)
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt')
-val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
+train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', num_workers=num_workers)
+val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', num_workers=num_workers)
 
-max_n = 1 # max n-gram for BLEU score
+max_n = 4 # max n-gram for BLEU score
 # Evaluation function
 @torch.no_grad()
 
@@ -332,7 +341,7 @@ local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 
 
-model = CombinedModel(densenet_model, model)
+# model = CombinedModel(densenet_model, model)
 model.train()
 train_start_time = time.time()
 
