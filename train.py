@@ -31,7 +31,7 @@ from torchvision import models
 from DenseNet import PositionalEncoding2D, InputEmbeddings
 from torchvision.models import DenseNet169_Weights
 from torcheval.metrics.functional import multiclass_f1_score
-from DataLoader import get_dataloader
+from DataLoader import get_dataloader, distributed_sampler
 import wandb
 from torchtext.data.metrics import bleu_score
 
@@ -251,9 +251,18 @@ def log_info(message, also_print=False):
     if also_print:
         print(log_message)
 
+
+if ddp :
+    train_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', num_workers=num_workers)
+    val_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', num_workers=num_workers)
+else :
+    train_sampler = None
+    val_sampler = None
+
+
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', num_workers=num_workers)
-val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', num_workers=num_workers)
+train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', num_workers=num_workers, sampler=train_sampler)
+val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', num_workers=num_workers, sampler=val_sampler)
 
 max_n = 4 # max n-gram for BLEU score
 # Evaluation function
@@ -261,6 +270,7 @@ max_n = 4 # max n-gram for BLEU score
 
 # calculate loss on val sets
 def evaluate(model , val_loader, device, eval_iters=eval_iters):
+    """ Evaluate the model on the validation set """
     model.eval()
 
     total_loss = 0
@@ -300,7 +310,7 @@ def evaluate(model , val_loader, device, eval_iters=eval_iters):
             micro_f1_score += multiclass_f1_score(padded_set[0], padded_set[1])
             predicted_tokens = tokenizer.convert_ids_to_tokens(pred)
             decoded_label = tokenizer.convert_ids_to_tokens(label)
-            tempbleu += bleu_score([predicted_tokens], [[decoded_label]], max_n=max_n, weights=[1.0])
+            tempbleu += bleu_score([predicted_tokens], [[decoded_label]], max_n=max_n)
             count +=1
             
         total_bleu += tempbleu / count
@@ -342,152 +352,163 @@ raw_model = model.module if ddp else model # unwrap DDP container if needed
 
 
 # model = CombinedModel(densenet_model, model)
-model.train()
 train_start_time = time.time()
+def main():
+    for epoch in range(num_epochs):
 
-for epoch in range(num_epochs):
-    log_info(f"Starting epoch {epoch+1}/{num_epochs}", also_print=True)
-    
-    for batch_idx, (images, latex_labels) in enumerate(train_loader):
-        if time.time() - train_start_time > max_train_time * 60:  # Convert minutes to seconds
-            log_info(f"Reached maximum training time of {max_train_time} minutes. Stopping training.", also_print=True)
-            break
-
-        # Get the image embeddings and the latex labels
-        images = images.to(device)
+        if ddp :
+            train_loader.sampler.set_epoch(epoch)
+            val_loader.sampler.set_epoch(epoch)
         
-        # Tokenize LaTeX labels
-        input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
+        model.train()
 
-        input_ids = input_ids.to(device)
-        attention_mask = attention_mask.to(device)
-        targets = targets.to(device)
+        if master_process:
+            log_info(f"Starting epoch {epoch+1}/{num_epochs}", also_print=True)
         
-        # Determine and set the learning rate for this iteration
-        lr = get_lr(iter_num) if decay_lr else learning_rate
+        for batch_idx, (images, latex_labels) in enumerate(train_loader):
+            if time.time() - train_start_time > max_train_time * 60:  # Convert minutes to seconds
+                log_info(f"Reached maximum training time of {max_train_time} minutes. Stopping training.", also_print=True)
+                break
 
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-
-        # Evaluation and checkpointing
-        if iter_num % eval_interval == 0 and master_process:
-            with torch.no_grad():
-                val_loss, val_bleu, val_f1 = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
-
-            print(f"step {iter_num}: val loss {val_loss:.4f}, val BLEU {val_bleu:.4f}, val F1 {val_f1:.4f}")
-
-
-            if wandb_log:
-                wandb.log({
-                    "iter": iter_num,
-                    "val/loss": val_loss,
-                    "lr": lr,
-                    "val/bleu": val_bleu,
-                    "val/f1": val_f1,
-                    "val/ppl": math.exp(val_loss),
-                })
-
-            # save the model if its the best so far
-            if val_loss < best_val_loss or always_save_checkpoint:
-                best_val_loss = val_loss
-
-                if iter_num > 0:
-                    checkpoint = {
-                        'model': model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'model_args': model_args,
-                        'iter_num': iter_num,
-                        'best_val_loss': best_val_loss,
-                        'config': config,
-                    }
-                    print(f"saving checkpoint to {out_dir}")
-                    torch.save(checkpoint, os.path.join(out_dir, 'best_model.pt'))
-        
-        # Forward backward update, with optional gradient accumulation
-        for micro_step in range(gradient_accumulation_steps):
-            if ddp:
-                model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+            # Get the image embeddings and the latex labels
+            images = images.to(device)
             
-            # Forward pass
-            with ctx:
-                outputs = model(images=images, targets=targets)
-                if isinstance(outputs, tuple):
-                    logits, loss = outputs
-                else :
-                    logits, loss = outputs, None
+            # Tokenize LaTeX labels
+            input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
+
+            input_ids = input_ids.to(device)
+            attention_mask = attention_mask.to(device)
+            targets = targets.to(device)
+            
+            # Determine and set the learning rate for this iteration
+            lr = get_lr(iter_num) if decay_lr else learning_rate
+
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
+
+            # Evaluation and checkpointing
+            if iter_num % eval_interval == 0 and master_process:
+                with torch.no_grad():
+                    val_loss, val_bleu, val_f1 = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
+
+                print(f"step {iter_num}: val loss {val_loss:.4f}, val BLEU {val_bleu:.4f}, val F1 {val_f1:.4f}")
+
+
+                if wandb_log:
+                    wandb.log({
+                        "iter": iter_num,
+                        "val/loss": val_loss,
+                        "lr": lr,
+                        "val/bleu": val_bleu,
+                        "val/f1": val_f1,
+                        "val/ppl": math.exp(val_loss),
+                    })
+
+                # save the model if its the best so far
+                if val_loss < best_val_loss or always_save_checkpoint:
+                    best_val_loss = val_loss
+
+                    if iter_num > 0:
+                        checkpoint = {
+                            'model': model.state_dict(),
+                            'optimizer': optimizer.state_dict(),
+                            'model_args': model_args,
+                            'iter_num': iter_num,
+                            'best_val_loss': best_val_loss,
+                            'config': config,
+                        }
+                        print(f"saving checkpoint to {out_dir}")
+                        torch.save(checkpoint, os.path.join(out_dir, 'best_model.pt'))
+            
+            # Forward backward update, with optional gradient accumulation
+            for micro_step in range(gradient_accumulation_steps):
+                if ddp:
+                    model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+                
+                # Forward pass
+                with ctx:
+                    outputs = model(images=images, targets=targets)
+                    if isinstance(outputs, tuple):
+                        logits, loss = outputs
+                    else :
+                        logits, loss = outputs, None
+
+                    sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
+                    non_pad_mask = sample_prediction != tokenizer.pad_token_id
+                    decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
+                    loss = outputs[1] / gradient_accumulation_steps
+
+                    if wandb_log:
+                        wandb.log({
+                            "train/loss": loss,
+                            "train/ppl": math.exp(loss)
+                        })
+
+                # Backward pass
+                scaler.scale(loss).backward()
+            
+
+            # Clip the gradient
+            if grad_clip != 0.0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            
+            # Step the optimizer and scaler if training in fp16
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+
+            # Timing and logging
+            t1 = time.time()
+            dt = t1 - t0
+            t0 = t1
+
+            if iter_num % log_interval == 0 and master_process:
+                # get loss as float. note: this is a CPU-GPU sync point
+                # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
+                lossf = loss.item() * gradient_accumulation_steps
+                
+                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
+
+            if iter_num % detailed_log_interval == 0:
+                lossf = loss.item() * gradient_accumulation_steps
+                log_info(f"Iteration {iter_num}, Epoch {epoch+1}, Batch {batch_idx+1}:")
+                log_info(f"  Loss: {lossf:.4f}")
+                log_info(f"  Learning rate: {lr:.6f}")
+                log_info(f"  Batch processing time: {dt*1000:.2f}ms")
+
+            # Log sample predictions
+            if iter_num % sample_interval == 0:
 
                 sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
                 non_pad_mask = sample_prediction != tokenizer.pad_token_id
                 decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
-                loss = outputs[1] / gradient_accumulation_steps
+                log_info(f"Sample prediction at iteration {iter_num}:")
+                log_info(f"  Predicted: {decoded_prediction}")
+                log_info(f"  Actual: {latex_labels[0]}")
 
-                if wandb_log:
-                    wandb.log({
-                        "train/loss": loss,
-                        "train/ppl": math.exp(loss)
-                    })
+            # Update the logging for the end of each iteration
+            if iter_num % log_interval == 0 and master_process:
+                lossf = loss.item() * gradient_accumulation_steps
+                log_info(f"Iteration {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms", also_print=True)
 
-            # Backward pass
-            scaler.scale(loss).backward()
-        
-
-        # Clip the gradient
-        if grad_clip != 0.0:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        
-        # Step the optimizer and scaler if training in fp16
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad(set_to_none=True)
-
-        # Timing and logging
-        t1 = time.time()
-        dt = t1 - t0
-        t0 = t1
-
-        if iter_num % log_interval == 0 and master_process:
-            # get loss as float. note: this is a CPU-GPU sync point
-            # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-            lossf = loss.item() * gradient_accumulation_steps
+            iter_num += 1
+            local_iter_num += 1
             
-            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
+            # termination condition
+            if iter_num > max_iters:
+                log_info(f"Reached maximum iterations ({max_iters}). Stopping training.", also_print=True)
+                break
 
-        if iter_num % detailed_log_interval == 0:
-            lossf = loss.item() * gradient_accumulation_steps
-            log_info(f"Iteration {iter_num}, Epoch {epoch+1}, Batch {batch_idx+1}:")
-            log_info(f"  Loss: {lossf:.4f}")
-            log_info(f"  Learning rate: {lr:.6f}")
-            log_info(f"  Batch processing time: {dt*1000:.2f}ms")
-
-        # Log sample predictions
-        if iter_num % sample_interval == 0:
-
-            sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
-            non_pad_mask = sample_prediction != tokenizer.pad_token_id
-            decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
-            log_info(f"Sample prediction at iteration {iter_num}:")
-            log_info(f"  Predicted: {decoded_prediction}")
-            log_info(f"  Actual: {latex_labels[0]}")
-
-        # Update the logging for the end of each iteration
-        if iter_num % log_interval == 0 and master_process:
-            lossf = loss.item() * gradient_accumulation_steps
-            log_info(f"Iteration {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms", also_print=True)
-
-        iter_num += 1
-        local_iter_num += 1
-        
-        # termination condition
-        if iter_num > max_iters:
-            log_info(f"Reached maximum iterations ({max_iters}). Stopping training.", also_print=True)
+        if time.time() - train_start_time > max_train_time * 60:
+            print(f"Training time exceeded {max_train_time} minutes. Stopping training.")
             break
 
-    if time.time() - train_start_time > max_train_time * 60:
-        print(f"Training time exceeded {max_train_time} minutes. Stopping training.")
-        break
+    print(f"Training completed. Total iterations: {iter_num}")
 
-print(f"Training completed. Total iterations: {iter_num}")
+    if ddp:
+        destroy_process_group()
 
-if ddp:
-    destroy_process_group()
+
+if __name__ == '__main__':
+    main()

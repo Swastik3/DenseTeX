@@ -74,8 +74,31 @@ class CustomDataset(Dataset):
     
         return new_image
 
-def get_dataloader(batch_size, image_dir='../../UniMER-1M/images/', label_file='../../UniMER-1M/train.txt', transform=None, cache_file='valid_indices_cache.pkl', num_workers=1):
+
+def distributed_sampler(rank, world_size, image_dir, label_file, transform=None, cache_file='valid_indices_cache.pkl'):
+    """ Create a distributed sampler for the dataset 
+    Args:
+        rank: Rank of the current process
+        world_size: Total number of processes
+        dataset: The dataset to be distributed
+    """
     dataset = CustomDataset(image_dir=image_dir, label_file=label_file, transform=transform, cache_file=cache_file)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    dist_sampler = torch.utils.data.distributed.DistributedSampler(
+        dataset = dataset,
+        num_replicas= world_size,
+        rank=rank,
+        shuffle=True
+    )
+    return dist_sampler
+
+
+def get_dataloader(batch_size, image_dir='../../UniMER-1M/images/', label_file='../../UniMER-1M/train.txt', transform=None, cache_file='valid_indices_cache.pkl', num_workers=1, sampler=None):
+    dataset = CustomDataset(image_dir=image_dir, label_file=label_file, transform=transform, cache_file=cache_file)
+
+    if sampler is not None:
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, sampler=sampler)
+    else:
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+
     return dataloader
 
