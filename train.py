@@ -88,7 +88,7 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
-num_workers = 32 # number of DataLoader workers
+num_workers = 0 # number of DataLoader workers
 
 # configuration parameters that are allowed to be overridden from command line
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
