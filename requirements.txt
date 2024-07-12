@@ -1,6 +1,5 @@
-torchtext
-torcheval
-torchaudio
+torchtext --no-deps
+torcheval --no-deps
 transformers
 Pillow
 numpy
