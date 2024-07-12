@@ -1,9 +1,9 @@
-torchtext --no-deps
-torcheval --no-deps
+torch
+torchvision
+torchaudio
 transformers
 Pillow
 numpy
 wandb
 matplotlib
 nltk
-tiktoken
