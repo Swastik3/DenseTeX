@@ -1,0 +1,10 @@
+torchtext
+torcheval
+torchaudio
+transformers
+Pillow
+numpy
+wandb
+matplotlib
+nltk
+tiktoken
