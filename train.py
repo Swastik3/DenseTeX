@@ -34,6 +34,7 @@ from torcheval.metrics.functional import multiclass_f1_score
 from DataLoader import get_dataloader, distributed_sampler
 import wandb
 from torchtext.data.metrics import bleu_score
+import torch.multiprocessing as mp
 
 # HYPERPARAMETERS
 
@@ -100,10 +101,14 @@ config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
 if ddp:
+    # set master address & master port
+    # MASTER_ADDR is the IP address of the machine running the rank 0 process
+    os.environ['MASTER_ADDR'] = os.environ.get('MASTER_ADDR', 'localhost')
+    os.environ['MASTER_PORT'] = os.environ.get('MASTER_PORT', '12355')
     init_process_group(backend=backend)
-    ddp_rank = int(os.environ['RANK'])
-    ddp_local_rank = int(os.environ['LOCAL_RANK'])
-    ddp_world_size = int(os.environ['WORLD_SIZE'])
+    ddp_rank = int(os.environ['RANK']) # rank refers to the unique identifier assigned to each process in the group
+    ddp_local_rank = int(os.environ['LOCAL_RANK']) 
+    ddp_world_size = int(os.environ['WORLD_SIZE']) # world_size refers to the total number of processes in the group
     device = f'cuda:{ddp_local_rank}'
     torch.cuda.set_device(device)
     master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
@@ -511,4 +516,5 @@ def main():
 
 
 if __name__ == '__main__':
+    mp.spawn(main, nprocs=8, args=()) # 8 processes for 8 GPUs
     main()
