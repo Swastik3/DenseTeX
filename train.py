@@ -18,6 +18,7 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 
 import os
 import time
+import numpy as np
 import datetime
 import math
 from contextlib import nullcontext
@@ -36,8 +37,15 @@ from DataLoader import get_dataloader, distributed_sampler
 import wandb
 from torchtext.data.metrics import bleu_score
 import torch.multiprocessing as mp
-
+import warnings
+import torch._dynamo
 # HYPERPARAMETERS
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+np.int = int
+
+
+torch._dynamo.config.suppress_errors = True
 
 TORCH_LOGS="+dynamo"
 # max train time
