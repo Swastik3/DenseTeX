@@ -22,6 +22,7 @@ import datetime
 import math
 from contextlib import nullcontext
 import torch
+import torch.distributed
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
@@ -359,6 +360,8 @@ raw_model = model.module if ddp else model # unwrap DDP container if needed
 # model = CombinedModel(densenet_model, model)
 train_start_time = time.time()
 def main():
+    global iter_num, best_val_loss, local_iter_num, raw_model, model, optimizer, scaler, train_start_time
+
     for epoch in range(num_epochs):
 
         if ddp :
@@ -499,6 +502,9 @@ def main():
 
             iter_num += 1
             local_iter_num += 1
+
+        if ddp :
+            torch.distributed.barrier() # sync
             
             # termination condition
             if iter_num > max_iters:
@@ -516,5 +522,4 @@ def main():
 
 
 if __name__ == '__main__':
-    mp.spawn(main, nprocs=8, args=()) # 8 processes for 8 GPUs
     main()
