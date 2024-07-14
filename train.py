@@ -45,9 +45,9 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 np.int = int
 
 
-torch._dynamo.config.suppress_errors = True
+# torch._dynamo.config.suppress_errors = True
 
-TORCH_LOGS="+dynamo"
+# TORCH_LOGS="+dynamo"
 # max train time
 max_train_time = 56 # in mins
 # logging
