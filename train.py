@@ -259,8 +259,8 @@ def log_info(message, also_print=False):
 
 
 if ddp :
-    train_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', num_workers=num_workers)
-    val_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', num_workers=num_workers)
+    train_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt')
+    val_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
 else :
     train_sampler = None
     val_sampler = None
