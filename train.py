@@ -47,6 +47,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 torchtext.disable_torchtext_deprecation_warning()
 
 torch._dynamo.config.suppress_errors = True
+os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
 # TORCH_LOGS="+dynamo"
 # HYPERPARAMETERS
@@ -71,7 +72,7 @@ wandb_run_name = 'run' + str(time.time())
 # data
 dataset = 'UniMER'
 gradient_accumulation_steps = 8 # used to simulate larger batch sizes
-batch_size = 64 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 5 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 300 # max token length
 # model
 n_layer = 12
@@ -96,7 +97,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'cuda' if torch.cuda.is_available() else 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True # use PyTorch 2.0 to compile the model to be faster
+compile = False # use PyTorch 2.0 to compile the model to be faster
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
@@ -226,7 +227,7 @@ if compile:
 
 # wrap model into DDP container
 if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank])
+    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
 
 
 # Replace the original model with the combined model
@@ -317,6 +318,8 @@ val_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-Te
                               num_processes=ddp_world_size if ddp else 1,
                               num_workers=num_workers, sampler=val_sampler)
 
+print(f'train_loader', len(train_loader))
+print(f'val_loader, ', len(val_loader))
 max_n = 4 # max n-gram for BLEU score
 # Evaluation function
 @torch.no_grad()
@@ -408,6 +411,9 @@ train_start_time = time.time()
 
 t0 = time.time()
 
+for param in model.parameters():
+    param.requires_grad = True
+
 
 for epoch in range(num_epochs):
 
@@ -441,39 +447,6 @@ for epoch in range(num_epochs):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-        # Evaluation and checkpointing
-        if iter_num % eval_interval == 0 and master_process:
-            with torch.no_grad():
-                val_loss, val_bleu, val_f1 = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
-
-            print(f"step {iter_num}: val loss {val_loss:.4f}, val BLEU {val_bleu:.4f}, val F1 {val_f1:.4f}")
-
-
-            if wandb_log:
-                wandb.log({
-                    "iter": iter_num,
-                    "val/loss": val_loss,
-                    "lr": lr,
-                    "val/bleu": val_bleu,
-                    "val/f1": val_f1,
-                    "val/ppl": math.exp(val_loss),
-                })
-
-            # save the model if its the best so far
-            if val_loss < best_val_loss or always_save_checkpoint:
-                best_val_loss = val_loss
-
-                if iter_num > 0:
-                    checkpoint = {
-                        'model': model.module.state_dict() if ddp else model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'model_args': model_args,
-                        'iter_num': iter_num,
-                        'best_val_loss': best_val_loss,
-                        'config': config,
-                    }
-                    print(f"saving checkpoint to {out_dir}")
-                    torch.save(checkpoint, os.path.join(out_dir, 'best_model.pt'))
         
         # Forward backward update, with optional gradient accumulation
         for micro_step in range(gradient_accumulation_steps):
@@ -488,22 +461,33 @@ for epoch in range(num_epochs):
                 else :
                     logits, loss = outputs, None
 
+                # print(f"Loss type: {type(loss)}, value: {loss}")
+                # print(f'outputs: {outputs}')
+
+                # Ensure loss is a tensor
+                if not isinstance(loss, torch.Tensor):
+                    loss = torch.tensor(loss, requires_grad=True)
+
                 sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
                 non_pad_mask = sample_prediction != tokenizer.pad_token_id
                 decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
                 loss = outputs[1] / gradient_accumulation_steps
 
+                loss = loss.to(device)
+                # loss.requires_grad(True)
+
                 # for ddp
                 if ddp :
-                    loss_tensor = torch.tensor([loss.item()], device = device)
+                    loss_tensor = loss.clone()
+                    # loss_tensor = torch.tensor([loss.item()], device = device)
                     # perform all_reduce
                     dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG) # averaging loss across multiple GPUs
                     # update the loss
-                    loss = loss_tensor.item()
+                    loss = loss_tensor
 
                 if wandb_log:
                     wandb.log({
-                        "train/loss": loss,
+                        "train/loss": loss.item(),
                         "train/ppl": math.exp(loss)
                     })
 
@@ -557,6 +541,40 @@ for epoch in range(num_epochs):
 
         iter_num += 1
         local_iter_num += 1
+
+    # Evaluation and checkpointing
+    if iter_num % eval_interval == 0 and master_process:
+        with torch.no_grad():
+            val_loss, val_bleu, val_f1 = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
+
+        print(f"step {iter_num}: val loss {val_loss:.4f}, val BLEU {val_bleu:.4f}, val F1 {val_f1:.4f}")
+
+
+        if wandb_log:
+            wandb.log({
+                "iter": iter_num,
+                "val/loss": val_loss,
+                "lr": lr,
+                "val/bleu": val_bleu,
+                "val/f1": val_f1,
+                "val/ppl": math.exp(val_loss),
+            })
+
+        # save the model if its the best so far
+        if val_loss < best_val_loss or always_save_checkpoint:
+            best_val_loss = val_loss
+
+            if iter_num > 0:
+                checkpoint = {
+                    'model': model.module.state_dict() if ddp else model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'model_args': model_args,
+                    'iter_num': iter_num,
+                    'best_val_loss': best_val_loss,
+                    'config': config,
+                }
+                print(f"saving checkpoint to {out_dir}")
+                torch.save(checkpoint, os.path.join(out_dir, 'best_model.pt'))
 
     if ddp :
         torch.distributed.barrier() # sync
