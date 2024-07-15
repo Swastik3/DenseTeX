@@ -27,12 +27,14 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DistributedSampler
+import torch.distributed as dist
 from model import GPTConfig, GPT
 from torchvision import models
 from DenseNet import PositionalEncoding2D, InputEmbeddings
 from torchvision.models import DenseNet169_Weights
 from torcheval.metrics.functional import multiclass_f1_score
-from DataLoader import get_dataloader, distributed_sampler
+from DataLoader import CustomDataLoader, CustomDataset
 import wandb
 from torchtext.data.metrics import bleu_score
 import torch.multiprocessing as mp
@@ -257,17 +259,63 @@ def log_info(message, also_print=False):
         print(log_message)
 
 
-if ddp :
-    train_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt')
-    val_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
-else :
-    train_sampler = None
-    val_sampler = None
+# if ddp :
+#     train_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt')
+#     val_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
+# else :
+#     train_sampler = None
+#     val_sampler = None
 
+def dist_sampler(ddp, ddp_rank, ddp_world_size):
+    if ddp:
+        # Training sampler
+        train_dataset = CustomDataset(
+            image_dir='./data/UniMER-1M/images',
+            label_file='./data/UniMER-1M/train.txt',
+            cache_file='valid_indices_train.pkl'
+        )
+        train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=ddp_world_size,
+            rank=ddp_rank,
+            shuffle=True
+        )
+
+        # Validation sampler
+        val_dataset = CustomDataset(
+            image_dir='./data/UniMER-Test/spe/',
+            label_file='./data/UniMER-Test/spe.txt',
+            cache_file='valid_indices_val.pkl'
+        )
+        val_sampler = DistributedSampler(
+            val_dataset,
+            num_replicas=ddp_world_size,
+            rank=ddp_rank,
+            shuffle=False  # Usually, we don't shuffle the validation set
+        )
+    else:
+        train_sampler = None
+        val_sampler = None
+
+    return train_sampler, val_sampler
+
+
+if ddp:
+    train_sampler, val_sampler = dist_sampler(ddp, ddp_rank, ddp_world_size)
+else:
+    train_sampler, val_sampler = None, None
+            
 
 # get the dataloader
-train_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', num_workers=num_workers, sampler=train_sampler)
-val_loader = get_dataloader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', num_workers=num_workers, sampler=val_sampler)
+train_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', 
+                                process_rank=ddp_rank if ddp else 0,
+                                num_processes=ddp_world_size if ddp else 1,
+                                num_workers=num_workers, sampler=train_sampler)
+
+val_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', 
+                              process_rank=ddp_rank if ddp else 0,
+                              num_processes=ddp_world_size if ddp else 1,
+                              num_workers=num_workers, sampler=val_sampler)
 
 max_n = 4 # max n-gram for BLEU score
 # Evaluation function
@@ -372,7 +420,7 @@ for epoch in range(num_epochs):
     if master_process:
         log_info(f"Starting epoch {epoch+1}/{num_epochs}", also_print=True)
     
-    for batch_idx, (images, latex_labels) in tqdm(enumerate(train_loader),):
+    for batch_idx, (images, latex_labels) in enumerate(train_loader):
         if time.time() - train_start_time > max_train_time * 60:  # Convert minutes to seconds
             log_info(f"Reached maximum training time of {max_train_time} minutes. Stopping training.", also_print=True)
             break
@@ -444,6 +492,14 @@ for epoch in range(num_epochs):
                 non_pad_mask = sample_prediction != tokenizer.pad_token_id
                 decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
                 loss = outputs[1] / gradient_accumulation_steps
+
+                # for ddp
+                if ddp :
+                    loss_tensor = torch.tensor([loss.item()], device = device)
+                    # perform all_reduce
+                    dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG) # averaging loss across multiple GPUs
+                    # update the loss
+                    loss = loss_tensor.item()
 
                 if wandb_log:
                     wandb.log({
