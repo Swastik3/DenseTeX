@@ -273,7 +273,7 @@ def dist_sampler(ddp, ddp_rank, ddp_world_size):
         train_dataset = CustomDataset(
             image_dir='./data/UniMER-1M/images',
             label_file='./data/UniMER-1M/train.txt',
-            cache_file='valid_indices_train.pkl'
+            cache_file='valid_indices_cache.pkl'
         )
         train_sampler = DistributedSampler(
             train_dataset,
@@ -447,6 +447,43 @@ for epoch in range(num_epochs):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
+        # Evaluation and checkpointing
+        if iter_num % eval_interval == 0 and master_process:
+            with torch.no_grad():
+                val_loss, val_bleu, val_f1 = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
+
+                print(f"step {iter_num}: val loss {val_loss:.4f}, val BLEU {val_bleu:.4f}, val F1 {val_f1:.4f}")
+
+
+                if wandb_log:
+                    wandb.log({
+                        "iter": iter_num,
+                        "val/loss": val_loss,
+                        "lr": lr,
+                        "val/bleu": val_bleu,
+                        "val/f1": val_f1,
+                        "val/ppl": math.exp(val_loss),
+                    })
+
+                # save the model if its the best so far
+                if val_loss < best_val_loss or always_save_checkpoint:
+                    best_val_loss = val_loss
+
+                    if iter_num > 0:
+                        checkpoint = {
+                            'model': model.module.state_dict() if ddp else model.state_dict(),
+                            'optimizer': optimizer.state_dict(),
+                            'model_args': model_args,
+                            'iter_num': iter_num,
+                            'best_val_loss': best_val_loss,
+                            'config': config,
+                        }
+                        print(f"saving checkpoint to {out_dir}")
+                        torch.save(checkpoint, os.path.join(out_dir, 'best_model.pt'))
+
+        if iter_num == 0 and eval_only:
+            break
+
         
         # Forward backward update, with optional gradient accumulation
         for micro_step in range(gradient_accumulation_steps):
@@ -540,41 +577,7 @@ for epoch in range(num_epochs):
             log_info(f"Iteration {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms", also_print=True)
 
         iter_num += 1
-        local_iter_num += 1
-
-    # Evaluation and checkpointing
-    if iter_num % eval_interval == 0 and master_process:
-        with torch.no_grad():
-            val_loss, val_bleu, val_f1 = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
-
-        print(f"step {iter_num}: val loss {val_loss:.4f}, val BLEU {val_bleu:.4f}, val F1 {val_f1:.4f}")
-
-
-        if wandb_log:
-            wandb.log({
-                "iter": iter_num,
-                "val/loss": val_loss,
-                "lr": lr,
-                "val/bleu": val_bleu,
-                "val/f1": val_f1,
-                "val/ppl": math.exp(val_loss),
-            })
-
-        # save the model if its the best so far
-        if val_loss < best_val_loss or always_save_checkpoint:
-            best_val_loss = val_loss
-
-            if iter_num > 0:
-                checkpoint = {
-                    'model': model.module.state_dict() if ddp else model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'model_args': model_args,
-                    'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
-                    'config': config,
-                }
-                print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'best_model.pt'))
+        local_iter_num += 1    
 
     if ddp :
         torch.distributed.barrier() # sync
