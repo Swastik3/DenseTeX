@@ -97,9 +97,10 @@ class CustomDataLoader:
 
     def __iter__(self):
         if self.sampler is not None:
-            dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, sampler=self.sampler)
+            dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, 
+                                    sampler=self.sampler, pin_memory=True, prefetch_factor=2)
         else:
-            dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=self.shuffle, num_workers=self.num_workers)
+            dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=self.shuffle, num_workers=self.num_workers, pin_memory=True)
         return iter(dataloader)
     
     def get_epoch(self):
@@ -111,6 +112,7 @@ class CustomDataLoader:
 class SubsetCustomDataLoader:
     def __init__(self, image_dir, label_file, process_rank, num_processes, subset_size, 
                  transform=None, cache_file='valid_indices_cache.pkl', shuffle=True, 
+                 sampler=None,
                  batch_size=1, num_workers=1, seed=42):
         # Initialize the full dataset
         self.full_dataset = CustomDataset(image_dir=image_dir, label_file=label_file, 
@@ -144,14 +146,16 @@ class SubsetCustomDataLoader:
         return len(self.dataset)
 
     def __iter__(self):
-        dataloader = DataLoader(
-            self.dataset, 
-            batch_size=self.batch_size, 
-            shuffle=False,  # Shuffle is handled by DistributedSampler
-            num_workers=self.num_workers, 
-            sampler=self.sampler,
-            pin_memory=True  # This can speed up data transfer to GPU
-        )
+        if self.sampler is not None:
+            dataloader = DataLoader(
+                self.dataset, 
+                batch_size=self.batch_size, 
+                shuffle=False,  # Shuffle is handled by DistributedSampler
+                num_workers=self.num_workers, 
+                sampler=self.sampler,
+                pin_memory=True,  # This can speed up data transfer to GPU
+                prefetch_factor=2
+            )
         return iter(dataloader)
 
     def get_epoch(self):

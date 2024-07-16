@@ -414,6 +414,8 @@ def get_lr(it):
 # logging
 if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
+else :
+    wandb_log = False
 
 # training loop 
 local_iter_num = 0 # number of iterations in the lifetime of this process
