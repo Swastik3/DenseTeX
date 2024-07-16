@@ -1,9 +1,10 @@
 import os
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset, DistributedSampler
 from torchvision import transforms
 from PIL import Image
 import pickle
+import random
 
 class CustomDataset(Dataset):
     def __init__(self, image_dir, label_file, transform=None, cache_file='valid_indices_cache.pkl', shuffle=True):
@@ -75,32 +76,6 @@ class CustomDataset(Dataset):
         return new_image
 
 
-# def distributed_sampler(rank, world_size, image_dir, label_file, transform=None, cache_file='valid_indices_cache.pkl'):
-#     """ Create a distributed sampler for the dataset 
-#     Args:
-#         rank: Rank of the current process
-#         world_size: Total number of processes
-#         dataset: The dataset to be distributed
-#     """
-#     dataset = CustomDataset(image_dir=image_dir, label_file=label_file, transform=transform, cache_file=cache_file)
-#     dist_sampler = torch.utils.data.distributed.DistributedSampler(
-#         dataset = dataset,
-#         num_replicas= world_size,
-#         rank=rank,
-#         shuffle=True
-#     )
-#     return dist_sampler
-
-
-# def get_dataloader(batch_size, image_dir='../../UniMER-1M/images/', label_file='../../UniMER-1M/train.txt', transform=None, cache_file='valid_indices_cache.pkl', num_workers=1, sampler=None):
-#     dataset = CustomDataset(image_dir=image_dir, label_file=label_file, transform=transform, cache_file=cache_file)
-
-#     if sampler is not None:
-#         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, sampler=sampler)
-#     else:
-#         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-
-#     return dataloader
 
 class CustomDataLoader:
     def __init__(self, image_dir, label_file, process_rank, num_processes, transform=None, cache_file='valid_indices_cache.pkl', shuffle=True, batch_size=1, num_workers=1, sampler=None):
@@ -130,5 +105,57 @@ class CustomDataLoader:
     def get_epoch(self):
         return self.sampler.epoch
     
+    def set_epoch(self, epoch):
+        self.sampler.set_epoch(epoch)
+
+class SubsetCustomDataLoader:
+    def __init__(self, image_dir, label_file, process_rank, num_processes, subset_size, 
+                 transform=None, cache_file='valid_indices_cache.pkl', shuffle=True, 
+                 batch_size=1, num_workers=1, seed=42):
+        # Initialize the full dataset
+        self.full_dataset = CustomDataset(image_dir=image_dir, label_file=label_file, 
+                                          transform=transform, cache_file=cache_file)
+        
+        # Create a subset of the dataset
+        total_size = len(self.full_dataset)
+        subset_size = min(subset_size, total_size)
+        
+        # Use a fixed seed for reproducibility
+        random.seed(seed)
+        subset_indices = random.sample(range(total_size), subset_size)
+        
+        self.dataset = Subset(self.full_dataset, subset_indices)
+        
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.shuffle = shuffle
+        self.process_rank = process_rank
+        self.num_processes = num_processes
+        
+        # Create a DistributedSampler for multi-GPU training
+        self.sampler = DistributedSampler(
+            self.dataset,
+            num_replicas=self.num_processes,
+            rank=self.process_rank,
+            shuffle=self.shuffle
+        )
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __iter__(self):
+        dataloader = DataLoader(
+            self.dataset, 
+            batch_size=self.batch_size, 
+            shuffle=False,  # Shuffle is handled by DistributedSampler
+            num_workers=self.num_workers, 
+            sampler=self.sampler,
+            pin_memory=True  # This can speed up data transfer to GPU
+        )
+        return iter(dataloader)
+
+    def get_epoch(self):
+        return self.sampler.epoch
+
     def set_epoch(self, epoch):
         self.sampler.set_epoch(epoch)

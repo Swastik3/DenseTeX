@@ -34,7 +34,7 @@ from torchvision import models
 from DenseNet import PositionalEncoding2D, InputEmbeddings
 from torchvision.models import DenseNet169_Weights
 from torcheval.metrics.functional import multiclass_f1_score
-from DataLoader import CustomDataLoader, CustomDataset
+from DataLoader import CustomDataLoader, CustomDataset, SubsetCustomDataLoader
 import wandb
 from torchtext.data.metrics import bleu_score
 import torch.multiprocessing as mp
@@ -72,7 +72,7 @@ wandb_run_name = 'run' + str(time.time())
 # data
 dataset = 'UniMER'
 gradient_accumulation_steps = 8 # used to simulate larger batch sizes
-batch_size = 5 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 1 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 300 # max token length
 # model
 n_layer = 12
@@ -308,7 +308,20 @@ else:
             
 
 # get the dataloader
-train_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', 
+# train_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', 
+#                                 process_rank=ddp_rank if ddp else 0,
+#                                 num_processes=ddp_world_size if ddp else 1,
+#                                 num_workers=num_workers, sampler=train_sampler)
+
+# val_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', 
+#                               process_rank=ddp_rank if ddp else 0,
+#                               num_processes=ddp_world_size if ddp else 1,
+#                               num_workers=num_workers, sampler=val_sampler)
+
+subset_size = 150000
+# get subset loader
+train_loader = SubsetCustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', 
+                                subset_size=subset_size,
                                 process_rank=ddp_rank if ddp else 0,
                                 num_processes=ddp_world_size if ddp else 1,
                                 num_workers=num_workers, sampler=train_sampler)
@@ -317,6 +330,7 @@ val_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-Te
                               process_rank=ddp_rank if ddp else 0,
                               num_processes=ddp_world_size if ddp else 1,
                               num_workers=num_workers, sampler=val_sampler)
+
 
 print(f'train_loader', len(train_loader))
 print(f'val_loader, ', len(val_loader))
