@@ -525,7 +525,7 @@ for epoch in range(num_epochs):
                 if wandb_log:
                     wandb.log({
                         "train/loss": loss.item(),
-                        "train/ppl": math.exp(loss)
+                        "train/ppl": math.exp(loss.item())
                     })
 
             # Backward pass
