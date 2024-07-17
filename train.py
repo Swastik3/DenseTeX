@@ -42,7 +42,6 @@ import warnings
 import torch._dynamo
 import torchtext
 from tqdm import tqdm
-from torch.profiler import profile, record_function, ProfilerActivity
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 torchtext.disable_torchtext_deprecation_warning()
@@ -71,8 +70,8 @@ wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
 # data
 dataset = 'UniMER'
-gradient_accumulation_steps = 8 # used to simulate larger batch sizes
-batch_size = 128 # if gradient_accumulation_steps > 1, this is the micro-batch size
+gradient_accumulation_steps = 4*8 # used to simulate larger batch sizes
+batch_size = 16 # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
 block_size = 300 # max token length
 # model
 n_layer = 12
@@ -314,18 +313,18 @@ else:
 #                               num_workers=num_workers, sampler=val_sampler)
 
 subset_size = 150000
-with profile(activities=[ProfilerActivity.CUDA, ProfilerActivity.CPU], 
-             profile_memory=True,record_shapes=True) as prof :
+# with profile(activities=[ProfilerActivity.CUDA, ProfilerActivity.CPU], 
+#              profile_memory=True,record_shapes=True) as prof :
 
-    with record_function("dataloader") :
+#     with record_function("dataloader") :
 # get subset loader
-        train_loader = SubsetCustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', 
+train_loader = SubsetCustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', 
                                         subset_size=subset_size,
                                         process_rank=ddp_rank if ddp else 0,
                                         num_processes=ddp_world_size if ddp else 1,
                                         num_workers=num_workers, sampler=train_sampler)
 
-print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+# print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
 
 val_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', 
                               process_rank=ddp_rank if ddp else 0,
