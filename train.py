@@ -42,6 +42,7 @@ import warnings
 import torch._dynamo
 import torchtext
 from tqdm import tqdm
+from torch.profiler import profile, record_function, ProfilerActivity
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 torchtext.disable_torchtext_deprecation_warning()
@@ -49,7 +50,6 @@ torchtext.disable_torchtext_deprecation_warning()
 torch._dynamo.config.suppress_errors = True
 os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
-# TORCH_LOGS="+dynamo"
 # HYPERPARAMETERS
 # max train time
 max_train_time = 56 # in mins
@@ -66,13 +66,13 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = True # disabled by default
+wandb_log = False # disabled by default
 wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
 # data
 dataset = 'UniMER'
 gradient_accumulation_steps = 8 # used to simulate larger batch sizes
-batch_size = 1 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 128 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 300 # max token length
 # model
 n_layer = 12
@@ -97,11 +97,11 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'cuda' if torch.cuda.is_available() else 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = False # use PyTorch 2.0 to compile the model to be faster
+compile = True # use PyTorch 2.0 to compile the model to be faster
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
-num_workers = 0 # number of DataLoader workers
+num_workers = 4 # number of DataLoader workers
 
 # configuration parameters that are allowed to be overridden from command line
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -161,8 +161,9 @@ densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 12,
 densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, 768))
 
 gptconf = GPTConfig(**model_args)
-gpt_model = GPT(gptconf)# Move the DenseNet model to the correct device
+gpt_model = GPT(gptconf)
 
+# Move the DenseNet model to the correct device
 densenet_model = densenet_model.to(device)
 
 
@@ -260,12 +261,6 @@ def log_info(message, also_print=False):
         print(log_message)
 
 
-# if ddp :
-#     train_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt')
-#     val_sampler = distributed_sampler(ddp_rank, ddp_world_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl')
-# else :
-#     train_sampler = None
-#     val_sampler = None
 
 def dist_sampler(ddp, ddp_rank, ddp_world_size):
     if ddp:
@@ -319,12 +314,18 @@ else:
 #                               num_workers=num_workers, sampler=val_sampler)
 
 subset_size = 150000
+with profile(activities=[ProfilerActivity.CUDA, ProfilerActivity.CPU], 
+             profile_memory=True,record_shapes=True) as prof :
+
+    with record_function("dataloader") :
 # get subset loader
-train_loader = SubsetCustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', 
-                                subset_size=subset_size,
-                                process_rank=ddp_rank if ddp else 0,
-                                num_processes=ddp_world_size if ddp else 1,
-                                num_workers=num_workers, sampler=train_sampler)
+        train_loader = SubsetCustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', 
+                                        subset_size=subset_size,
+                                        process_rank=ddp_rank if ddp else 0,
+                                        num_processes=ddp_world_size if ddp else 1,
+                                        num_workers=num_workers, sampler=train_sampler)
+
+print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
 
 val_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', 
                               process_rank=ddp_rank if ddp else 0,
@@ -332,8 +333,6 @@ val_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-Te
                               num_workers=num_workers, sampler=val_sampler)
 
 
-print(f'train_loader', len(train_loader))
-print(f'val_loader, ', len(val_loader))
 max_n = 4 # max n-gram for BLEU score
 # Evaluation function
 @torch.no_grad()
@@ -514,9 +513,6 @@ for epoch in range(num_epochs):
                 else :
                     logits, loss = outputs, None
 
-                # print(f"Loss type: {type(loss)}, value: {loss}")
-                # print(f'outputs: {outputs}')
-
                 # Ensure loss is a tensor
                 if not isinstance(loss, torch.Tensor):
                     loss = torch.tensor(loss, requires_grad=True)
@@ -527,12 +523,10 @@ for epoch in range(num_epochs):
                 loss = outputs[1] / gradient_accumulation_steps
 
                 loss = loss.to(device)
-                # loss.requires_grad(True)
 
                 # for ddp
                 if ddp :
                     loss_tensor = loss.clone()
-                    # loss_tensor = torch.tensor([loss.item()], device = device)
                     # perform all_reduce
                     dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG) # averaging loss across multiple GPUs
                     # update the loss
