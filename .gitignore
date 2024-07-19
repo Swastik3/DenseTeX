@@ -10,3 +10,4 @@ wandb/
 valid_indices_val_cache.pkl
 valid_indices_cache.pkl
 dump.py
+,venv
