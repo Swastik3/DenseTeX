@@ -39,15 +39,11 @@ import wandb
 from torchtext.data.metrics import bleu_score
 import torch.multiprocessing as mp
 import warnings
-import torch._dynamo
 import torchtext
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 torchtext.disable_torchtext_deprecation_warning()
-
-torch._dynamo.config.suppress_errors = True
-os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
 # HYPERPARAMETERS
 # max train time
@@ -134,7 +130,8 @@ else:
     seed_offset = 0
     ddp_world_size = 1
 tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
-print(f"tokens per iteration will be: {tokens_per_iter:,}")
+if master_process:
+    print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
@@ -166,7 +163,6 @@ gpt_model = GPT(gptconf)
 densenet_model = densenet_model.to(device)
 
 
-
 class CombinedModel(nn.Module):
     def __init__(self, densenet_model, original_model):
         super(CombinedModel, self).__init__()
@@ -190,12 +186,15 @@ model = CombinedModel(densenet_model, gpt_model)
 
 # initialization of model based on the arg init_from (resume, scratch, gpt2, etc.)
 if init_from == 'scratch':
-    # init a new model from scratch
-    print("Initializing a new model from scratch")  
+    if master_process :
+        # init a new model from scratch
+        print("Initializing a new model from scratch")
 
 
 elif init_from == 'resume':
-    print(f"Resuming training from {out_dir}")
+    if master_process:
+        # load the model from the last
+        print(f"Resuming training from {out_dir}")
     ckpt_path = os.path.join(out_dir, 'best_model.pt')
     checkpoint = torch.load(ckpt_path, map_location=device)
     
@@ -205,6 +204,15 @@ elif init_from == 'resume':
     # Load other training state
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+
+    # Broadcast iter_num and best_val_loss
+    if ddp:
+        iter_num = torch.tensor(iter_num).to(device)
+        best_val_loss = torch.tensor(best_val_loss).to(device)
+        dist.broadcast(iter_num, src=0)
+        dist.broadcast(best_val_loss, src=0)
+        iter_num = iter_num.item()
+        best_val_loss = best_val_loss.item()
 
 
 # move the model to the correct device
