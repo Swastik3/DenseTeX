@@ -3,8 +3,6 @@
 # Clone the GitHub repository
 sudo apt-get install -y unzip
 
-cd BuildSpaceResearch
-
 mkdir data
 cd data
 wget https://huggingface.co/datasets/wanderkid/UniMER_Dataset/resolve/main/UniMER-Test.zip
