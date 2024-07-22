@@ -66,8 +66,8 @@ wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
 # data
 dataset = 'UniMER'
-gradient_accumulation_steps = 4*8 # used to simulate larger batch sizes
-batch_size = 12 # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
+gradient_accumulation_steps = 2*8 # used to simulate larger batch sizes
+batch_size = 8 # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
 block_size = 300 # max token length
 # model
 n_layer = 12
@@ -96,7 +96,7 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
-num_workers = 4 # number of DataLoader workers
+num_workers = 2 # number of DataLoader workers
 
 # configuration parameters that are allowed to be overridden from command line
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
