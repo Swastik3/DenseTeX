@@ -54,7 +54,7 @@ sample_interval = 100  # Log sample predictions every 100 iterations
 detailed_log_interval = 100  # Log detailed metrics every 10 iterations
 # I/O
 out_dir = 'out'
-eval_interval = 2500
+eval_interval = 1000
 log_interval = 20
 eval_iters = 90
 eval_only = False # if True, script exits right after the first eval
@@ -541,9 +541,9 @@ for epoch in range(num_epochs):
 
                 if wandb_log:
                     wandb.log({
-                        "train/loss": loss,
-                        "train/ppl": math.exp(loss)
-                    })
+                        "train/loss": loss.item(),
+                        "train/ppl": math.exp(loss.item()),
+                    }, step = iter_num)
 
             # Backward pass
             scaler.scale(loss).backward()
