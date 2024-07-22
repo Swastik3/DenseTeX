@@ -66,7 +66,7 @@ wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
 # data
 dataset = 'UniMER'
-gradient_accumulation_steps = 2*8 # used to simulate larger batch sizes
+gradient_accumulation_steps = 2*4 # used to simulate larger batch sizes
 batch_size = 8 # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
 block_size = 300 # max token length
 # model
@@ -541,8 +541,8 @@ for epoch in range(num_epochs):
 
                 if wandb_log:
                     wandb.log({
-                        "train/loss": loss.item(),
-                        "train/ppl": math.exp(loss.item())
+                        "train/loss": loss,
+                        "train/ppl": math.exp(loss)
                     })
 
             # Backward pass
