@@ -92,7 +92,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'cuda' if torch.cuda.is_available() else 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True # use PyTorch 2.0 to compile the model to be faster
+compile = False # use PyTorch 2.0 to compile the model to be faster
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
@@ -228,10 +228,10 @@ if init_from == 'resume':
 checkpoint = None # free up memory
 
 # compile the model
-if compile:
-    print("compiling the model... (takes a ~minute)")
-    unoptimized_model = gpt_model
-    model = torch.compile(model) # requires PyTorch 2.0
+# if compile:
+#     print("compiling the model... (takes a ~minute)")
+#     unoptimized_model = gpt_model
+#     model = torch.compile(model) # requires PyTorch 2.0
 
 # wrap model into DDP container
 if ddp:
