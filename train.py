@@ -65,13 +65,13 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = False # disabled by default
+wandb_log = True # disabled by default
 wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
 # data
 dataset = 'UniMER'
 gradient_accumulation_steps = 4*8 # used to simulate larger batch sizes
-batch_size = 16 # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
+batch_size = 12 # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
 block_size = 300 # max token length
 # model
 n_layer = 12
