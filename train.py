@@ -527,22 +527,25 @@ for epoch in range(num_epochs):
                 sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
                 non_pad_mask = sample_prediction != tokenizer.pad_token_id
                 decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
-                loss = outputs[1] / gradient_accumulation_steps
+                orig_loss = outputs[1]
 
+                # for backward pass not logging
+                loss = outputs[1] / gradient_accumulation_steps
                 loss = loss.to(device)
 
                 # for ddp
                 if ddp :
-                    loss_tensor = loss.clone()
+                    loss_tensor = orig_loss.clone()
                     # perform all_reduce
                     dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG) # averaging loss across multiple GPUs
                     # update the loss
-                    loss = loss_tensor
+                    avg_loss = loss_tensor
 
-                if wandb_log:
+                if wandb_log and master_process:
                     wandb.log({
-                        "train/loss": loss.item(),
-                        "train/ppl": math.exp(loss.item()),
+                        "train/loss": avg_loss.item() if ddp else orig_loss.item(),
+                        "train/ppl": math.exp(avg_loss.item() if ddp else orig_loss.item()),
+                        'iteration': iter_num,
                     }, step = iter_num)
 
             # Backward pass
