@@ -29,9 +29,9 @@ from torch.distributed import init_process_group, destroy_process_group
 import torch.distributed as dist
 from model import GPTConfig, GPT, CombinedModel
 from torchvision import models
-from DenseNet import PositionalEncoding2D, InputEmbeddings
+from encoder import PositionalEncoding2D, InputEmbeddings
 from torchvision.models import DenseNet169_Weights
-from DataLoader import CustomDataLoader, CustomDataset, SubsetCustomDataLoader, dist_sampler
+from dataloader import CustomDataLoader, CustomDataset, SubsetCustomDataLoader, dist_sampler
 import wandb
 import warnings
 
