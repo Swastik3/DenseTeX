@@ -98,7 +98,7 @@ class CustomDataLoader:
     def __iter__(self):
         if self.sampler is not None:
             dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, 
-                                    sampler=self.sampler, pin_memory=True, prefetch_factor=2)
+                                    sampler=self.sampler, pin_memory=True, )
         else:
             dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=self.shuffle, num_workers=self.num_workers, pin_memory=True)
         return iter(dataloader)
@@ -154,7 +154,6 @@ class SubsetCustomDataLoader:
                 num_workers=self.num_workers, 
                 sampler=self.sampler,
                 pin_memory=True,  # This can speed up data transfer to GPU
-                prefetch_factor=2
             )
         return iter(dataloader)
 
@@ -163,3 +162,37 @@ class SubsetCustomDataLoader:
 
     def set_epoch(self, epoch):
         self.sampler.set_epoch(epoch)
+
+# for parallel training
+def dist_sampler(ddp, ddp_rank, ddp_world_size):
+    if ddp:
+        # Training sampler
+        train_dataset = CustomDataset(
+            image_dir='./data/UniMER-1M/images',
+            label_file='./data/UniMER-1M/train.txt',
+            cache_file='valid_indices_cache.pkl'
+        )
+        train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=ddp_world_size,
+            rank=ddp_rank,
+            shuffle=True
+        )
+
+        # Validation sampler
+        val_dataset = CustomDataset(
+            image_dir='./data/UniMER-Test/spe/',
+            label_file='./data/UniMER-Test/spe.txt',
+            cache_file='valid_indices_val.pkl'
+        )
+        val_sampler = DistributedSampler(
+            val_dataset,
+            num_replicas=ddp_world_size,
+            rank=ddp_rank,
+            shuffle=False  # Usually, we don't shuffle the validation set
+        )
+    else:
+        train_sampler = None
+        val_sampler = None
+
+    return train_sampler, val_sampler

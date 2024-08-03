@@ -26,36 +26,24 @@ import torch.distributed
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
-from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import DistributedSampler
 import torch.distributed as dist
-from model import GPTConfig, GPT
+from model import GPTConfig, GPT, CombinedModel
 from torchvision import models
 from DenseNet import PositionalEncoding2D, InputEmbeddings
 from torchvision.models import DenseNet169_Weights
-from torcheval.metrics.functional import multiclass_f1_score
-from DataLoader import CustomDataLoader, CustomDataset, SubsetCustomDataLoader
+from DataLoader import CustomDataLoader, CustomDataset, SubsetCustomDataLoader, dist_sampler
 import wandb
-from torchtext.data.metrics import bleu_score
-import torch.multiprocessing as mp
 import warnings
-import torchtext
-from tqdm import tqdm
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-torchtext.disable_torchtext_deprecation_warning()
 
-# HYPERPARAMETERS
-# max train time
-max_train_time = 56 # in mins
 # logging
 log_file = 'training_log.txt'
 sample_interval = 100  # Log sample predictions every 100 iterations
-detailed_log_interval = 100  # Log detailed metrics every 10 iterations
 # I/O
 out_dir = 'out'
 eval_interval = 1200
-log_interval = 20
+log_interval = 1
 eval_iters = 90
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
@@ -64,10 +52,8 @@ init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 wandb_log = True # disabled by default
 wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
-# data
-dataset = 'UniMER'
-gradient_accumulation_steps = 8*4 # used to simulate larger batch sizes
-batch_size = 8   # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
+gradient_accumulation_steps = 1 #8*4 for 8 GPUs # used to simulate larger batch sizes
+batch_size = 1   # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
 block_size = 300 # max token length
 # model
 n_layer = 12
@@ -96,7 +82,11 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
-num_workers = 2 # number of DataLoader workers
+num_workers = 0 # number of DataLoader workers
+num_epochs = 100
+max_length = 300
+max_n = 4 # max n-gram for BLEU score
+subset_size = 150000
 
 # configuration parameters that are allowed to be overridden from command line
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -141,7 +131,7 @@ torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
 # note: float16 data type will automatically use a GradScaler
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype) # context managaer for auto mixed precision training
 
 
 # model init
@@ -150,38 +140,18 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=300,
 
 # Define the DenseNet169 model
 densenet_model = models.densenet169(weights=DenseNet169_Weights.IMAGENET1K_V1) # change to DEFAULT HERE
-
 # Remove the final fully connected layer to get the final feature maps
 densenet_model = nn.Sequential(*list(densenet_model.children())[:-1])
 densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 12, 25)) # hardcoded this based on denseNet output size
 densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, 768))
-
-gptconf = GPTConfig(**model_args)
-gpt_model = GPT(gptconf)
-
 # Move the DenseNet model to the correct device
 densenet_model = densenet_model.to(device)
 
+# Define the GPT model
+gptconf = GPTConfig(**model_args)
+gpt_model = GPT(gptconf)
 
-class CombinedModel(nn.Module):
-    def __init__(self, densenet_model, original_model):
-        super(CombinedModel, self).__init__()
-        self.densenet_model = densenet_model
-        self.original_model = original_model
-
-    def forward(self, images, targets):
-        embeddings = self.densenet_model(images)
-        outputs = self.original_model(input_embd=embeddings, targets=targets)
-        return outputs
-    
-    def load_state_dict(self, state_dict):
-
-        densenet_dict = {k.replace('densenet_model.', ''): v for k, v in state_dict.items() if k.startswith('densenet_model.')}
-        original_dict = {k.replace('original_model.', ''): v for k, v in state_dict.items() if k.startswith('original_model.')}
-
-        self.densenet_model.load_state_dict(densenet_dict)
-        self.original_model.load_state_dict(original_dict)
-
+# Combine the DenseNet and GPT models
 model = CombinedModel(densenet_model, gpt_model)
 
 # initialization of model based on the arg init_from (resume, scratch, gpt2, etc.)
@@ -214,6 +184,32 @@ elif init_from == 'resume':
         iter_num = iter_num.item()
         best_val_loss = best_val_loss.item()
 
+elif init_from == 'gptex':
+    if master_process:
+        # load the model from the last
+        print(f"Initializing from gpTex model")
+
+    pretrained_model_path = './path/gptex.pt'  
+    gpt_model = GPT.from_pretrained(pretrained_model_path=pretrained_model_path)
+
+    # read off the created config params, so we can store them into checkpoint correctly
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+        model_args[k] = getattr(model.config, k)
+
+    # Move the model to the correct device
+    gpt_model.to(device)
+    # Reset training state
+    iter_num = 0
+    best_val_loss = 1e9
+
+    if master_process:
+        print(f"Loaded gpTex model with {model_args['n_layer']} layers, {model_args['n_head']} heads, and {model_args['n_embd']} embedding dimensions")
+
+# crop down the model block size if desired, using model surgery
+if block_size < model.original_model.config.block_size:
+    model.original_model.crop_block_size(block_size)
+    model_args['block_size'] = block_size
+
 
 # move the model to the correct device
 model.to(device)
@@ -238,25 +234,8 @@ if ddp:
     model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
 
 
-# Replace the original model with the combined model
-num_epochs = 100
-global_step = 0
-max_length = 300
-
 # Load the tokenizer
 tokenizer = gpt_model.tokenizer
-
-def tokenize_latex(latex_text, max_length):
-    toks = tokenizer(latex_text, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
-    input_ids = toks['input_ids']
-    attention_mask = toks['attention_mask']
-    
-    targets = input_ids.clone()
-    # Shift targets to the right, filling in with pad token
-    targets[:, :-1] = input_ids[:, 1:]
-    targets[:, -1] = tokenizer.pad_token_id
-    
-    return input_ids, attention_mask, targets
 
 # logging results to a txt file
 def log_info(message, also_print=False):
@@ -266,41 +245,6 @@ def log_info(message, also_print=False):
         f.write(log_message + '\n')
     if also_print:
         print(log_message)
-
-
-
-def dist_sampler(ddp, ddp_rank, ddp_world_size):
-    if ddp:
-        # Training sampler
-        train_dataset = CustomDataset(
-            image_dir='./data/UniMER-1M/images',
-            label_file='./data/UniMER-1M/train.txt',
-            cache_file='valid_indices_cache.pkl'
-        )
-        train_sampler = DistributedSampler(
-            train_dataset,
-            num_replicas=ddp_world_size,
-            rank=ddp_rank,
-            shuffle=True
-        )
-
-        # Validation sampler
-        val_dataset = CustomDataset(
-            image_dir='./data/UniMER-Test/spe/',
-            label_file='./data/UniMER-Test/spe.txt',
-            cache_file='valid_indices_val.pkl'
-        )
-        val_sampler = DistributedSampler(
-            val_dataset,
-            num_replicas=ddp_world_size,
-            rank=ddp_rank,
-            shuffle=False  # Usually, we don't shuffle the validation set
-        )
-    else:
-        train_sampler = None
-        val_sampler = None
-
-    return train_sampler, val_sampler
 
 
 if ddp:
@@ -320,19 +264,13 @@ else:
 #                               num_processes=ddp_world_size if ddp else 1,
 #                               num_workers=num_workers, sampler=val_sampler)
 
-subset_size = 150000
-# with profile(activities=[ProfilerActivity.CUDA, ProfilerActivity.CPU], 
-#              profile_memory=True,record_shapes=True) as prof :
 
-#     with record_function("dataloader") :
-# get subset loader
+# get subset dataloader
 train_loader = SubsetCustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-1M/images', label_file='./data/UniMER-1M/train.txt', 
                                         subset_size=subset_size,
                                         process_rank=ddp_rank if ddp else 0,
                                         num_processes=ddp_world_size if ddp else 1,
                                         num_workers=num_workers, sampler=train_sampler)
-
-# print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
 
 val_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-Test/spe/', label_file='./data/UniMER-Test/spe.txt', cache_file='valid_indices_val.pkl', 
                               process_rank=ddp_rank if ddp else 0,
@@ -340,71 +278,8 @@ val_loader = CustomDataLoader(batch_size=batch_size, image_dir='./data/UniMER-Te
                               num_workers=num_workers, sampler=val_sampler)
 
 
-max_n = 4 # max n-gram for BLEU score
-# Evaluation function
-@torch.no_grad()
-
-# calculate loss on val sets
-def evaluate(model , val_loader, device, eval_iters=eval_iters):
-    """ Evaluate the model on the validation set """
-    model.eval()
-
-    total_loss = 0
-    num_batches = 0
-    total_bleu = 0
-    total_f1 = 0
-    
-    for i, (images, latex_labels) in enumerate(val_loader):
-        if i >= eval_iters:
-            break
-        
-        images = images.to(device)
-        
-        # Tokenize LaTeX labels
-        input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
-        input_ids = input_ids.to(device)
-        attention_mask = attention_mask.to(device)
-        targets = targets.to(device)
-        
-        # Forward pass
-        gptconf = GPTConfig(**model_args)
-        outputs = model(images=images, targets=targets)
-        loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
-        if isinstance(outputs, tuple):
-            logits = outputs[0]
-        else :
-            logits = outputs
-
-        tempbleu = 0; count = 0
-        micro_f1_score = 0
-        
-        for logit, label in zip(logits, input_ids):
-            pred = torch.multinomial(logit.softmax(dim=-1), num_samples=1)
-            pred = pred[pred != tokenizer.pad_token_id]
-            label = label[label != tokenizer.pad_token_id]
-            padded_set = pad_sequence([pred,label], batch_first=True)
-            micro_f1_score += multiclass_f1_score(padded_set[0], padded_set[1])
-            predicted_tokens = tokenizer.convert_ids_to_tokens(pred)
-            decoded_label = tokenizer.convert_ids_to_tokens(label)
-            tempbleu += bleu_score([predicted_tokens], [[decoded_label]], max_n=max_n)
-            count +=1
-            
-        total_bleu += tempbleu / count
-        total_f1 += micro_f1_score / count
-        
-        loss = outputs[1] / gradient_accumulation_steps 
-        total_loss += loss.item()
-        num_batches += 1  
-
-    avg_loss = total_loss / num_batches
-    avg_bleu = total_bleu / num_batches
-    avg_f1 = total_f1 / num_batches
-    model.train()
-
-    return avg_loss, avg_bleu, avg_f1
-
-# learning rate decay scheduler (cosine with warmup)
 def get_lr(it):
+    """Learning rate decay scheduler w cosine warmup"""
     # 1) linear warmup for warmup_iters steps
     if it < warmup_iters:
         return learning_rate * it / warmup_iters
@@ -423,20 +298,12 @@ if wandb_log and master_process:
 else :
     wandb_log = False
 
-# training loop 
-local_iter_num = 0 # number of iterations in the lifetime of this process
-raw_model = model.module if ddp else model # unwrap DDP container if needed
-
-
-# model = CombinedModel(densenet_model, model)
-train_start_time = time.time()
-
 t0 = time.time()
-
+# set the model to training mode
 for param in model.parameters():
     param.requires_grad = True
 
-
+# training looop
 for epoch in range(num_epochs):
 
     if ddp :
@@ -449,33 +316,31 @@ for epoch in range(num_epochs):
         log_info(f"Starting epoch {epoch+1}/{num_epochs}", also_print=True)
     
     for batch_idx, (images, latex_labels) in enumerate(train_loader):
-        if time.time() - train_start_time > max_train_time * 60:  # Convert minutes to seconds
-            log_info(f"Reached maximum training time of {max_train_time} minutes. Stopping training.", also_print=True)
-            break
 
         # Get the image embeddings and the latex labels
         images = images.to(device)
         
         # Tokenize LaTeX labels
-        input_ids, attention_mask, targets = tokenize_latex(latex_labels, max_length=300)
-
-        input_ids = input_ids.to(device)
-        attention_mask = attention_mask.to(device)
-        targets = targets.to(device)
+        input_ids, attention_mask, targets = model.tokenize_latex(latex_labels, tokenizer=tokenizer, max_length=300)
+        input_ids, attention_mask, targets = input_ids.to(device), attention_mask.to(device), targets.to(device)
         
         # Determine and set the learning rate for this iteration
         lr = get_lr(iter_num) if decay_lr else learning_rate
-
+        # update the learning rate
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
         # Evaluation and checkpointing
         if iter_num % eval_interval == 0 and master_process:
             with torch.no_grad():
-                val_loss, val_bleu, val_f1 = evaluate(model, val_loader, device=device, eval_iters=eval_iters)
+                if ddp :
+                    val_loss, val_bleu = model.module.evaluate(model, val_loader, device=device, eval_iters=eval_iters, 
+                                                                       gradient_accumulation_steps=gradient_accumulation_steps, max_n=max_n, tokenizer=tokenizer)
+                else :
+                    val_loss, val_bleu  = model.evaluate(model, val_loader, device=device, eval_iters=eval_iters, 
+                                                                gradient_accumulation_steps=gradient_accumulation_steps, max_n=max_n, tokenizer=tokenizer)
 
-                print(f"step {iter_num}: val loss {val_loss:.4f}, val BLEU {val_bleu:.4f}, val F1 {val_f1:.4f}")
-
+                print(f"step {iter_num} | val loss {val_loss:.4f} | val BLEU {val_bleu:.4f}")
 
                 if wandb_log:
                     wandb.log({
@@ -483,9 +348,8 @@ for epoch in range(num_epochs):
                         "val/loss": val_loss,
                         "lr": lr,
                         "val/bleu": val_bleu,
-                        "val/f1": val_f1,
-                        "val/ppl": math.exp(val_loss),
-                    })
+                        # "val/ppl": math.exp(val_loss),
+                    }, step = iter_num)
 
                 # save the model if its the best so far
                 if val_loss < best_val_loss or always_save_checkpoint:
@@ -501,12 +365,11 @@ for epoch in range(num_epochs):
                             'config': config,
                         }
                         print(f"saving checkpoint to {out_dir}")
-                        torch.save(checkpoint, os.path.join(out_dir, 'best_model.pt'))
+                        torch.save(checkpoint, os.path.join(out_dir, f'best_model.pt'))
 
         if iter_num == 0 and eval_only:
             break
 
-        
         # Forward backward update, with optional gradient accumulation
         for micro_step in range(gradient_accumulation_steps):
             if ddp:
@@ -523,7 +386,7 @@ for epoch in range(num_epochs):
                 # Ensure loss is a tensor
                 if not isinstance(loss, torch.Tensor):
                     loss = torch.tensor(loss, requires_grad=True)
-
+                # Get the predicted tokens
                 sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
                 non_pad_mask = sample_prediction != tokenizer.pad_token_id
                 decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
@@ -544,7 +407,7 @@ for epoch in range(num_epochs):
                 if wandb_log and master_process:
                     wandb.log({
                         "train/loss": avg_loss.item() if ddp else orig_loss.item(),
-                        "train/ppl": math.exp(avg_loss.item() if ddp else orig_loss.item()),
+                        # "train/ppl": math.exp(avg_loss.item() if ddp else orig_loss.item()),
                         'iteration': iter_num,
                     }, step = iter_num)
 
@@ -571,33 +434,17 @@ for epoch in range(num_epochs):
             # get loss as float. note: this is a CPU-GPU sync point
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
             lossf = loss.item() * gradient_accumulation_steps
-            
-            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
 
-        if iter_num % detailed_log_interval == 0:
-            lossf = loss.item() * gradient_accumulation_steps
-            log_info(f"Iteration {iter_num}, Epoch {epoch+1}, Batch {batch_idx+1}:")
-            log_info(f"  Loss: {lossf:.4f}")
-            log_info(f"  Learning rate: {lr:.6f}")
-            log_info(f"  Batch processing time: {dt*1000:.2f}ms")
+            log_message = f"Epoch {epoch+1} | iter {iter_num} : loss {lossf:.4f} | time {dt*1000:.2f}ms | lr {lr:.6f} | tok/s {tokens_per_iter/dt:.2f}"
+            log_info(log_message, also_print=True)
+
 
         # Log sample predictions
         if iter_num % sample_interval == 0:
-
-            sample_prediction = torch.multinomial(logits[0].softmax(dim=-1), num_samples=1)
-            non_pad_mask = sample_prediction != tokenizer.pad_token_id
-            decoded_prediction = tokenizer.decode(sample_prediction[non_pad_mask])
-            log_info(f"Sample prediction at iteration {iter_num}:")
-            log_info(f"  Predicted: {decoded_prediction}")
-            log_info(f"  Actual: {latex_labels[0]}")
-
-        # Update the logging for the end of each iteration
-        if iter_num % log_interval == 0 and master_process:
-            lossf = loss.item() * gradient_accumulation_steps
-            log_info(f"Iteration {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms", also_print=True)
+            log_info(f" prediction at iter {iter_num} |  pred : {decoded_prediction}")
+            log_info(f" label : {latex_labels[0]}")            
 
         iter_num += 1
-        local_iter_num += 1    
 
     if ddp :
         torch.distributed.barrier() # sync
@@ -607,13 +454,7 @@ for epoch in range(num_epochs):
             log_info(f"Reached maximum iterations ({max_iters}). Stopping training.", also_print=True)
             break
 
-    if time.time() - train_start_time > max_train_time * 60:
-        print(f"Training time exceeded {max_train_time} minutes. Stopping training.")
-        break
-
 print(f"Training completed. Total iterations: {iter_num}")
 
 if ddp:
     destroy_process_group()
-
-

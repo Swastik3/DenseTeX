@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from transformers import AutoTokenizer
+from torchtext.data.metrics import bleu_score
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -150,7 +151,6 @@ class MLP(nn.Module):
         return x
 
 
-
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -168,7 +168,6 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
 
         return x
-
 
 
 @dataclass
@@ -252,16 +251,16 @@ class GPT(nn.Module):
 
 
 
-    # def crop_block_size(self, block_size):
-    #     # model surgery to decrease the block size if necessary
-    #     # but want to use a smaller block size for some smaller, simpler model
+    def crop_block_size(self, block_size):
+        # model surgery to decrease the block size if necessary
+        # but want to use a smaller block size for some smaller, simpler model
 
-    #     assert block_size <= self.config.block_size
-    #     self.config.block_size = block_size
+        assert block_size <= self.config.block_size
+        self.config.block_size = block_size
 
-    #     for block in self.transformer.h:
-    #         if hasattr(block.attn, 'bias'):
-    #             block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
+        for block in self.transformer.h:
+            if hasattr(block.attn, 'bias'):
+                block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
 
 
 
@@ -319,26 +318,11 @@ class GPT(nn.Module):
 
         return optimizer
 
-    # def estimate_mfu(self, fwdbwd_per_iter, dt):
-    #     """ estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS """
-    #     # first estimate the number of flops we do per iteration.
-    #     # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
-    #     N = self.get_num_params()
-    #     cfg = self.config
-    #     L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
-    #     flops_per_token = 6*N + 12*L*H*Q*T
-    #     flops_per_fwdbwd = flops_per_token * T
-    #     flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
-    #     # express our flops throughput as ratio of A100 bfloat16 peak flops
-    #     flops_achieved = flops_per_iter * (1.0/dt) # per second
-    #     flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
-    #     mfu = flops_achieved / flops_promised
-    #     return mfu
 
     @torch.no_grad()
     def generate(self, image_embedding, max_new_tokens, temperature=1.0, top_k=None):
         """
-        Generate LateX tokens given image embeddings
+        for inference, generate LateX tokens given image embeddings
 
         Take a conditioning sequence of input embeddings (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -363,14 +347,12 @@ class GPT(nn.Module):
 
             # Concatenate the image embedding with the current sequence
             current_seq = torch.cat([image_embedding, text_seq], dim=1)
-
             # ensure the sequence does not exceed block size
             if current_seq.size(1) > self.config.block_size:
                 current_seq = current_seq[:, -self.config.block_size:]
 
             # Forward pass through the model
             logits, _ = self(current_seq)
-            
             # Get logits for the next token
             next_token_logits = logits[:, -1, :] / temperature
             
@@ -381,20 +363,15 @@ class GPT(nn.Module):
             
             # Apply softmax to get probabilities
             probs = F.softmax(next_token_logits, dim=-1)
-            
             # Sample the next token
             next_token = torch.multinomial(probs, num_samples=1)
-            
             # Add the sampled token to our generated sequence
             generated_tokens[:, i] = next_token.view(-1)
-            
             # Convert the generated token to its string representation
             generated_text = self.tokenizer.decode(generated_tokens[0, :i+1])
-            
             # Prepare for the next iteration:
             # Embed the newly generated token
             next_token_embedding = self.token_embedding(next_token).view(1, 1, -1)
-            
             # Concatenate with the current sequence
             current_seq = torch.cat([current_seq, next_token_embedding], dim=1)
             
@@ -421,3 +398,106 @@ class GPT(nn.Module):
         if isinstance(tokens, str):
             tokens = self.tokenizer.encode(tokens, add_special_tokens=True, return_tensors='pt').squeeze(0)
         return self.token_embedding_layer(tokens)
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_path):
+        """
+        Load weights from a pre-trained model.
+        """
+
+        print(f"Loading weights from custom pretrained GPT model: {pretrained_model_path}")
+        
+        # load the custom gpt model
+        checkpoint = torch.load(pretrained_model_path, map_location = 'gpu' if torch.cuda.is_available() else 'cpu')
+        config = GPTConfig(**checkpoint['config_args'])
+        model = GPT(config)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        
+        return model
+
+
+class CombinedModel(nn.Module):
+    def __init__(self, densenet_model, original_model):
+        super(CombinedModel, self).__init__()
+        self.densenet_model = densenet_model
+        # gpt model initialization
+        self.original_model = original_model
+
+        # initialize the tokenizer
+        # self.tokenizer = AutoTokenizer.from_pretrained("witiko/mathberta")
+
+    def forward(self, images, targets):
+        embeddings = self.densenet_model(images)
+        outputs = self.original_model(input_embd=embeddings, targets=targets)
+        return outputs
+    
+    def load_state_dict(self, state_dict):
+
+        densenet_dict = {k.replace('densenet_model.', ''): v for k, v in state_dict.items() if k.startswith('densenet_model.')}
+        original_dict = {k.replace('original_model.', ''): v for k, v in state_dict.items() if k.startswith('original_model.')}
+
+        self.densenet_model.load_state_dict(densenet_dict)
+        self.original_model.load_state_dict(original_dict)
+
+
+    def tokenize_latex(self,latex_text, tokenizer, max_length):
+        """ Tokenize LaTeX text and return input_ids, attention_mask, and targets """
+        toks = tokenizer(latex_text, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
+        input_ids = toks['input_ids']
+        attention_mask = toks['attention_mask']
+        
+        targets = input_ids.clone()
+        # Shift targets to the right, filling in with pad token
+        targets[:, :-1] = input_ids[:, 1:]
+        targets[:, -1] = tokenizer.pad_token_id
+    
+        return input_ids, attention_mask, targets
+    
+    def evaluate(self, model , val_loader, device, eval_iters, tokenizer, max_n, gradient_accumulation_steps):
+        """ evaluate the model on the validation set """
+        model.eval()
+
+        total_loss = 0
+        num_batches = 0
+        total_bleu = 0
+        
+        for i, (images, latex_labels) in enumerate(val_loader):
+            if i >= eval_iters:
+                break
+            
+            images = images.to(device)
+            
+            # Tokenize LaTeX labels
+            input_ids, attention_mask, targets = self.tokenize_latex(latex_labels, tokenizer=tokenizer, max_length=300)
+            input_ids, attention_mask, targets = input_ids.to(device), attention_mask.to(device), targets.to(device)
+            
+            # Forward pass
+            outputs = model(images=images, targets=targets)
+            loss = outputs[1] if isinstance(outputs, tuple) else outputs.loss
+            if isinstance(outputs, tuple):
+                logits = outputs[0]
+            else :
+                logits = outputs
+
+            tempbleu = 0; count = 0
+            
+            for logit, label in zip(logits, input_ids):
+                pred = torch.multinomial(logit.softmax(dim=-1), num_samples=1)
+                pred = pred[pred != tokenizer.pad_token_id]
+                label = label[label != tokenizer.pad_token_id]
+                predicted_tokens = tokenizer.convert_ids_to_tokens(pred)
+                decoded_label = tokenizer.convert_ids_to_tokens(label)
+                tempbleu += bleu_score([predicted_tokens], [[decoded_label]], max_n=max_n)
+                count +=1
+                
+            total_bleu += tempbleu / count
+            
+            loss = outputs[1] / gradient_accumulation_steps 
+            total_loss += loss.item()
+            num_batches += 1  
+
+        avg_loss = total_loss / num_batches
+        avg_bleu = total_bleu / num_batches
+        model.train()
+
+        return avg_loss, avg_bleu
