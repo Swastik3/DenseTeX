@@ -15,7 +15,7 @@ init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = True # disabled by default
 wandb_project = 'image2latex'
-gradient_accumulation_steps = 1 #8*4 for 8 GPUs # used to simulate larger batch sizes
+gradient_accumulation_steps = 8*4 # for 8 GPUs # used to simulate larger batch sizes
 batch_size = 8   # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
 block_size = 300 # max token length
 # model
@@ -23,11 +23,11 @@ dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
-max_iters = 60000 # total number of training iterations
+max_iters = 60000 # total number of training iterations = (num_epochs * dataset_size) / (batch_size * gradient_accumulation_steps)
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
-warmup_iters = 1000 # how many steps to warm up for
-lr_decay_iters = 45000 # should be ~= max_iters per Chinchilla
+warmup_iters = 2000 # how many steps to warm up for ~= 1% to 5% of max_iters
+lr_decay_iters = 45000 # should be ~= 75% to 100% of max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 num_epochs = 100
 max_length = 300
