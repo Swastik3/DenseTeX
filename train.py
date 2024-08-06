@@ -184,27 +184,6 @@ elif init_from == 'resume':
         iter_num = iter_num.item()
         best_val_loss = best_val_loss.item()
 
-elif init_from == 'gptex':
-    if master_process:
-        # load the model from the last
-        print(f"Initializing from gpTex model")
-
-    pretrained_model_path = './path/gptex.pt'  
-    gpt_model = GPT.from_pretrained(pretrained_model_path=pretrained_model_path)
-
-    # read off the created config params, so we can store them into checkpoint correctly
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = getattr(model.config, k)
-
-    # Move the model to the correct device
-    gpt_model.to(device)
-    # Reset training state
-    iter_num = 0
-    best_val_loss = 1e9
-
-    if master_process:
-        print(f"Loaded gpTex model with {model_args['n_layer']} layers, {model_args['n_head']} heads, and {model_args['n_embd']} embedding dimensions")
-
 # crop down the model block size if desired, using model surgery
 if block_size < model.original_model.config.block_size:
     model.original_model.crop_block_size(block_size)

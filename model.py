@@ -399,21 +399,6 @@ class GPT(nn.Module):
             tokens = self.tokenizer.encode(tokens, add_special_tokens=True, return_tensors='pt').squeeze(0)
         return self.token_embedding_layer(tokens)
 
-    @classmethod
-    def from_pretrained(cls, pretrained_model_path):
-        """
-        Load weights from a pre-trained model.
-        """
-
-        print(f"Loading weights from custom pretrained GPT model: {pretrained_model_path}")
-        
-        # load the custom gpt model
-        checkpoint = torch.load(pretrained_model_path, map_location = 'gpu' if torch.cuda.is_available() else 'cpu')
-        config = GPTConfig(**checkpoint['config_args'])
-        model = GPT(config)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        
-        return model
 
 
 class CombinedModel(nn.Module):
