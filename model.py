@@ -180,7 +180,7 @@ class GPTConfig:
     dropout: float = 0.1
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster    
     block_size: int = 300  # Set to match the first dimension of our embeddings
-    vocab_size: int = 50257   # Set this to the number of classes in your task basically means the number of tokens in your vocabulary
+    vocab_size: int = 78680   # Set this to the number of classes in your task basically means the number of tokens in your vocabulary
 
 
 class GPT(nn.Module):
