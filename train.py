@@ -49,7 +49,7 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = False # disabled by default
+wandb_log = True # disabled by default
 wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
 gradient_accumulation_steps = 1 #8*4 for 8 GPUs # used to simulate larger batch sizes
