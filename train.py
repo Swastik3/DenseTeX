@@ -52,7 +52,7 @@ init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 wandb_log = True # disabled by default
 wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
-gradient_accumulation_steps = 4*4 #8*4 for 8 GPUs # used to simulate larger batch sizes
+gradient_accumulation_steps = 8 #8*4 for 8 GPUs # used to simulate larger batch sizes
 batch_size = 8   # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
 block_size = 300 # max token length
 # model
