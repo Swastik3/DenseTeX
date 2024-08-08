@@ -43,7 +43,7 @@ sample_interval = 100  # Log sample predictions every 100 iterations
 # I/O
 out_dir = 'out'
 eval_interval = 1200
-log_interval = 1
+log_interval = 20
 eval_iters = 90
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
@@ -52,8 +52,8 @@ init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 wandb_log = True # disabled by default
 wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
-gradient_accumulation_steps = 1 #8*4 for 8 GPUs # used to simulate larger batch sizes
-batch_size = 1   # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
+gradient_accumulation_steps = 4*4 #8*4 for 8 GPUs # used to simulate larger batch sizes
+batch_size = 8   # if gradient_accumulation_steps > 1, this is the MICRO-BATCH SIZE
 block_size = 300 # max token length
 # model
 n_layer = 12
@@ -70,7 +70,7 @@ beta2 = 0.95
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
-warmup_iters = 1000 # how many steps to warm up for
+warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 45000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # DDP settings
