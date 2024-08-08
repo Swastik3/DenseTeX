@@ -2,7 +2,8 @@ torch==2.2.0
 torchvision==0.17.0
 transformers
 Pillow
-numpy
+numpy==1.26.0
 wandb
 matplotlib
 nltk
+torchtext==0.17.0

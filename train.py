@@ -42,9 +42,9 @@ log_file = 'training_log.txt'
 sample_interval = 100  # Log sample predictions every 100 iterations
 # I/O
 out_dir = 'out'
-eval_interval = 1200
-log_interval = 20
-eval_iters = 90
+eval_interval = 600
+log_interval = 50
+eval_iters = 180
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -62,8 +62,8 @@ n_embd = 512
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
-learning_rate = 6e-4 # max learning rate
-max_iters = 60000 # total number of training iterations
+learning_rate = 6e-3 # max learning rate
+max_iters = 120000 # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
@@ -82,6 +82,7 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
+best_val_bleu = 0.0
 num_workers = 0 # number of DataLoader workers
 num_epochs = 100
 max_length = 300
@@ -174,6 +175,7 @@ elif init_from == 'resume':
     # Load other training state
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+    best_val_bleu = checkpoint['best_val_bleu']
 
     # Broadcast iter_num and best_val_loss
     if ddp:
@@ -331,17 +333,22 @@ for epoch in range(num_epochs):
                     }, step = iter_num)
 
                 # save the model if its the best so far
-                if val_loss < best_val_loss or always_save_checkpoint:
-                    best_val_loss = val_loss
+                if val_loss < best_val_loss or always_save_checkpoint or val_bleu > best_val_bleu:
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                    
+                    elif val_bleu > best_val_bleu:
+                        best_val_bleu = val_bleu
+                    
 
                     if iter_num > 0:
                         checkpoint = {
                             'model': model.module.state_dict() if ddp else model.state_dict(),
                             'optimizer': optimizer.state_dict(),
                             'model_args': model_args,
-                            'iter_num': iter_num,
                             'best_val_loss': best_val_loss,
                             'config': config,
+                            'best_val_bleu': best_val_bleu,
                         }
                         print(f"saving checkpoint to {out_dir}")
                         torch.save(checkpoint, os.path.join(out_dir, f'best_model.pt'))
@@ -387,7 +394,6 @@ for epoch in range(num_epochs):
                     wandb.log({
                         "train/loss": avg_loss.item() if ddp else orig_loss.item(),
                         # "train/ppl": math.exp(avg_loss.item() if ddp else orig_loss.item()),
-                        'iteration': iter_num,
                     }, step = iter_num)
 
             # Backward pass
@@ -415,7 +421,7 @@ for epoch in range(num_epochs):
             lossf = loss.item() * gradient_accumulation_steps
 
             log_message = f"Epoch {epoch+1} | iter {iter_num} : loss {lossf:.4f} | time {dt*1000:.2f}ms | lr {lr:.6f} | tok/s {tokens_per_iter/dt:.2f}"
-            log_info(log_message, also_print=True)
+            print(log_message)
 
 
         # Log sample predictions

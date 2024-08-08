@@ -18,4 +18,3 @@ sudo apt install python3-pip
 
 # install requirements
 pip install -r requirements.txt
-pip install torchtext==0.17.0
