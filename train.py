@@ -300,7 +300,7 @@ for epoch in range(num_epochs):
         images = images.to(device)
         
         # Tokenize LaTeX labels
-        input_ids, attention_mask, targets = model.tokenize_latex(latex_labels, tokenizer=tokenizer, max_length=300)
+        input_ids, attention_mask, targets = model.module.tokenize_latex(latex_labels, tokenizer=tokenizer, max_length=300)
         input_ids, attention_mask, targets = input_ids.to(device), attention_mask.to(device), targets.to(device)
         
         # Determine and set the learning rate for this iteration
