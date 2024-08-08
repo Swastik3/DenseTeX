@@ -49,7 +49,7 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = True # disabled by default
+wandb_log = False # disabled by default
 wandb_project = 'image2latex'
 wandb_run_name = 'run' + str(time.time())
 gradient_accumulation_steps = 1 #8*4 for 8 GPUs # used to simulate larger batch sizes
@@ -57,8 +57,8 @@ batch_size = 1   # if gradient_accumulation_steps > 1, this is the MICRO-BATCH S
 block_size = 300 # max token length
 # model
 n_layer = 12
-n_head = 12
-n_embd = 768
+n_head = 8
+n_embd = 512
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
@@ -143,7 +143,7 @@ densenet_model = models.densenet169(weights=DenseNet169_Weights.IMAGENET1K_V1) #
 # Remove the final fully connected layer to get the final feature maps
 densenet_model = nn.Sequential(*list(densenet_model.children())[:-1])
 densenet_model.add_module('PositionalEncoding2D', PositionalEncoding2D(1664, 12, 25)) # hardcoded this based on denseNet output size
-densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, 768))
+densenet_model.add_module('InputEmbeddings', InputEmbeddings(1664, GPTConfig.n_embd))
 # Move the DenseNet model to the correct device
 densenet_model = densenet_model.to(device)
 

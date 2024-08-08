@@ -107,11 +107,6 @@ class CrossAttention(nn.Module):
         _, T_enc, _ = encoder_output.size()
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        # q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        # k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        # q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        # v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-
         q = self.q(x) #.split(self.n_embd, dim=2)[0]
         k = self.k(encoder_output) #.split(self.n_embd, dim=2)[1:]
         v = self.v(encoder_output)
@@ -175,12 +170,12 @@ class GPTConfig:
     # block_size: int = 1024
     # vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
+    n_head: int = 8
+    n_embd: int = 512
     dropout: float = 0.1
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster    
     block_size: int = 300  # Set to match the first dimension of our embeddings
-    vocab_size: int = 78680   # Set this to the number of classes in your task basically means the number of tokens in your vocabulary
+    vocab_size: int = 78720   # Set this to the number of classes in your task basically means the number of tokens in your vocabulary, a multiple of 64 actual = 78680
 
 
 class GPT(nn.Module):

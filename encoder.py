@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+from model import GPTConfig
 
 class PositionalEncoding2D(nn.Module):
     def __init__(self, d_model, height, width):
@@ -56,7 +57,7 @@ class PositionalEncoding2D(nn.Module):
         return x
 
 class InputEmbeddings(nn.Module):
-    def __init__(self, in_channels=1664, out_dim=768):
+    def __init__(self, in_channels=1664, out_dim=GPTConfig.n_embd):
         super().__init__()
         self.in_channels = in_channels
         self.out_dim = out_dim
