@@ -160,7 +160,7 @@ class Block(nn.Module):
     def forward(self, x, encoder_output):
         x = x + self.attn(self.ln_1(x))
         x = x + self.cross_attn(self.ln_2(x), encoder_output)
-        x = x + self.mlp(self.ln_2(x))
+        x = x + self.mlp(self.ln_3(x))
 
         return x
 
