@@ -21,11 +21,11 @@ Model name is an Image-to-LaTeX model designed to convert mathematical equations
 To preserve the spatial relationships in mathematical, we implement a 2D positional encoding technique adapted from the Transformer model:
 
 
-$PE(x, y, 2i) = \sin(x/10000^{4i/D}) \\$
+$PE(x, y, 2i) = \sin(x/10000^{4i/D}) $
 
-$PE(x, y, 2i + 1) = \cos(x/10000^{4i/D}) \\$
+$PE(x, y, 2i + 1) = \cos(x/10000^{4i/D}) $
 
-$PE(x, y, 2j + D/2) = \sin(y/10000^{4j/D}) \\$
+$PE(x, y, 2j + D/2) = \sin(y/10000^{4j/D}) $
 
 $PE(x, y, 2j + 1 + D/2) = \cos(y/10000^{4j/D})$
 
