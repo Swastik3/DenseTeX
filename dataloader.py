@@ -180,11 +180,18 @@ def dist_sampler(ddp, ddp_rank, ddp_world_size):
         )
 
         # Validation sampler
-        val_dataset = CustomDataset(
+        val_dataset_cpe = CustomDataset(
+            image_dir='./data/UniMER-Test/cpe/',
+            label_file='./data/UniMER-Test/cpe.txt',
+            cache_file='valid_indices_val_cpe.pkl'
+        )
+        val_dataset_spe = CustomDataset(
             image_dir='./data/UniMER-Test/spe/',
             label_file='./data/UniMER-Test/spe.txt',
-            cache_file='valid_indices_val.pkl'
+            cache_file='valid_indices_val_spe.pkl'
         )
+        val_dataset = torch.utils.data.ConcatDataset([val_dataset_cpe, val_dataset_spe])
+        
         val_sampler = DistributedSampler(
             val_dataset,
             num_replicas=ddp_world_size,

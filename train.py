@@ -44,7 +44,7 @@ sample_interval = 100  # Log sample predictions every 100 iterations
 out_dir = 'out'
 eval_interval = 600
 log_interval = 50
-eval_iters = 180
+eval_iters = 355
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -62,7 +62,7 @@ n_embd = 512
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
-learning_rate = 6e-3 # max learning rate
+learning_rate = 6e-4 # max learning rate
 max_iters = 120000 # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
@@ -87,7 +87,7 @@ num_workers = 0 # number of DataLoader workers
 num_epochs = 100
 max_length = 300
 max_n = 4 # max n-gram for BLEU score
-subset_size = 150000
+subset_size = 300000
 
 # configuration parameters that are allowed to be overridden from command line
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
