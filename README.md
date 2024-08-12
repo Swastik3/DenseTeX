@@ -30,9 +30,9 @@ $PE(x, y, 2j + D/2) = \sin(y/10000^{4j/D}) $
 $PE(x, y, 2j + 1 + D/2) = \cos(y/10000^{4j/D})$
 
 where :
-- x and y specify the horizontal and vertical positions
-- `i, j ∈ [0, d/4)` specify the dimension
-- d is the model dimension
+- $x$ and $y$ specify the horizontal and vertical positions
+- $i, j ∈ [0, d/4)$ specify the dimension
+- $d$ is the model dimension
 
 These positional encodings are added to the feature maps, allowing the model to retain crucial spatial information about the relative positions of mathematical symbols in both horizontal and vertical directions.
 
@@ -49,3 +49,7 @@ here are the benchmarks from the model training. We trained on 4xA6000s for ~10 
 ![val_loss](./assets/val-loss.png)
 ![train_loss](./assets/train-loss.png)
 
+
+## acknowledgments
+
+huge thanks to Karpathy sensei for [nanoGPT](https://github.com/karpathy/nanoGPT) which inspired our transformer decoder <3
