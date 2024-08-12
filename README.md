@@ -6,7 +6,7 @@ Model name is an Image-to-LaTeX model designed to convert mathematical equations
 
 ### Encoder
 
-![CNN Encoder Architecture](./assets/encoder.svg)
+![CNN Encoder Architecture](./assets/encode.jpeg)
 
 - **Input** : Images of mathematical equations
 - **Base Model** : DenseNet-169
@@ -46,6 +46,7 @@ These positional encodings are added to the feature maps, allowing the model to 
 
 ## Benchmarks
 here are the benchmarks from the model training. We trained on 4xA6000s for ~10 hours.
+
 ![val_loss](./assets/val-loss.png)
 ![train_loss](./assets/train-loss.png)
 
