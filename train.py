@@ -399,7 +399,6 @@ for epoch in range(num_epochs):
             # Backward pass
             scaler.scale(loss).backward()
         
-
         # Clip the gradient
         if grad_clip != 0.0:
             scaler.unscale_(optimizer)

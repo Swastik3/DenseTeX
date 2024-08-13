@@ -36,8 +36,6 @@ where :
 
 These positional encodings are added to the feature maps, allowing the model to retain crucial spatial information about the relative positions of mathematical symbols in both horizontal and vertical directions.
 
-
-
 ### Decoder
 - **Input**: Image embeddings from the CNN Encoder
 - **Model**: a GPT-2 based transformer with cross-attention to image embeddings
@@ -49,6 +47,9 @@ here are the benchmarks from the model training. We trained on 4xA6000s for ~10 
 ![val_loss](./assets/val-loss.png)
 ![train_loss](./assets/train-loss.png)
 
+## Data
+
+we used the [UniMER-1M](https://huggingface.co/datasets/wanderkid/UniMER_Dataset) dataset for training and the `spe` & `cpe` samples for validation.
 
 ## acknowledgments
 

@@ -66,13 +66,10 @@ class InputEmbeddings(nn.Module):
     def forward(self, x):
         # x shape: [batch_size, 1664, 12, 25]
         batch_size = x.size(0)
-        
         # Reshape: [batch_size, 1664, 12, 25] -> [batch_size, 1664, 300]
         x = x.view(batch_size, self.in_channels, -1)
-        
         # Transpose: [batch_size, 1664, 300] -> [batch_size, 300, 1664]
         x = x.transpose(1, 2)
-        
         # Project: [batch_size, 300, 1664] -> [batch_size, 300, 768]
         x = self.projection(x)
         

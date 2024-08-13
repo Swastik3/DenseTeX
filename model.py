@@ -1,7 +1,6 @@
 """
-entire gpt2-124M model architecture
+DenseTeX model architecture
 """
-
 import math
 import inspect
 from dataclasses import dataclass
