@@ -1,6 +1,6 @@
-# model name
+# DenseTeX
 
-Model name is an Image-to-LaTeX model designed to convert mathematical equations from images into LaTeX code. By combining a powerful CNN encoder based on DenseNet-169 with a GPT-style decoder, our model achieves reasonable accuracy in transcribing complex mathematical notation.
+DenseTeX is an Image-to-LaTeX model designed to convert mathematical equations from images into LaTeX code. By combining a powerful CNN encoder based on DenseNet-169 with a GPT-style decoder, our model achieves reasonable accuracy in transcribing complex mathematical notation.
 
 ## model architecture
 
